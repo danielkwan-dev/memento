@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: boxd
+      POSTGRES_PASSWORD: boxd
+      POSTGRES_DB: boxd
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memento -d memento"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      MEMENTO_DATABASE_URL: postgres://memento:memento@postgres:5432/memento?sslmode=disable
+      MEMENTO_PORT: "8080"
+      MEMENTO_WORKER_HEALTH_URL: http://worker:8081/healthz
+      MEMENTO_CORS_ORIGINS: http://localhost:5173
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      MEMENTO_DATABASE_URL: postgres://memento:memento@postgres:5432/memento?sslmode=disable
+      MEMENTO_WORKER_PORT: "8081"
+    ports: ["8081:8081"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+volumes:
+  pgdata:

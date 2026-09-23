@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS user_stats;
+DROP TABLE IF EXISTS jobs;
+DROP TYPE  IF EXISTS job_phase;
+DROP TYPE  IF EXISTS job_status;
+DROP TYPE  IF EXISTS job_kind;
+DROP TABLE IF EXISTS diary_entries;
+DROP TABLE IF EXISTS watch_entries;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS film_languages;
+DROP TABLE IF EXISTS film_countries;
+DROP TABLE IF EXISTS film_studios;
+DROP TABLE IF EXISTS film_people;
+DROP TYPE  IF EXISTS person_role;
+DROP TABLE IF EXISTS film_themes;
+DROP TABLE IF EXISTS film_genres;
+DROP TABLE IF EXISTS films;

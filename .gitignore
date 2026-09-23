@@ -1,0 +1,7 @@
+/bin/
+*.exe
+.env
+.env.local
+web/node_modules/
+web/dist/
+coverage.out
