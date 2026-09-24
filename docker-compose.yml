@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: boxd
-      POSTGRES_PASSWORD: boxd
-      POSTGRES_DB: boxd
+      POSTGRES_USER: memento
+      POSTGRES_PASSWORD: memento
+      POSTGRES_DB: memento
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:

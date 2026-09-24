@@ -1,0 +1,9 @@
+# Normalize to LF in the repo; Go tooling and Docker builds expect it.
+* text=auto eol=lf
+
+# Fixtures are captured upstream bytes: never rewrite their line endings, or
+# parser tests stop reflecting what the server actually sent.
+internal/letterboxd/testdata/** -text
+
+*.png binary
+*.jpg binary
