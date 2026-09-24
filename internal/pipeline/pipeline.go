@@ -37,6 +37,16 @@ type Config struct {
 	// IndexConcurrency bounds requests to the user's own grid and diary pages.
 	// These are not in Cloudflare's edge cache, so this stays small.
 	IndexConcurrency int
+	// IndexMinInterval is the minimum gap between index requests.
+	//
+	// A concurrency cap alone is not enough: it limits how many requests are in
+	// flight, not how fast they are issued, and Cloudflare rate limits on the
+	// latter. Measured against a real 36-page profile: unpaced and at 400ms the
+	// index phase gets blocked partway through, while ~1.5s apart it completes
+	// with zero retries. Paginated pages are gated harder than page 1 -- plain
+	// curl gets 403 on every /page/N/ URL even when page 1 returns 200 -- so this
+	// is the setting that decides whether a large profile works at all.
+	IndexMinInterval time.Duration
 	// DetailConcurrency bounds requests to film pages, which ARE edge cached and
 	// therefore tolerate much more parallelism.
 	DetailConcurrency int
@@ -51,6 +61,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		IndexConcurrency:    3,
+		IndexMinInterval:    1500 * time.Millisecond,
 		DetailConcurrency:   16,
 		DetailsTTL:          90 * 24 * time.Hour,
 		StatsTTL:            7 * 24 * time.Hour,
@@ -63,6 +74,43 @@ type Pipeline struct {
 	store Store
 	cfg   Config
 	log   *slog.Logger
+}
+
+// indexLimiter paces index requests. Separate from the semaphore because the two
+// constrain different things: the semaphore caps requests in flight, this caps
+// requests per second.
+type indexLimiter struct {
+	mu       sync.Mutex
+	interval time.Duration
+	next     time.Time
+}
+
+// wait blocks until this goroutine's turn, or ctx is done.
+func (l *indexLimiter) wait(ctx context.Context) error {
+	if l == nil || l.interval <= 0 {
+		return nil
+	}
+	l.mu.Lock()
+	now := time.Now()
+	slot := l.next
+	if slot.Before(now) {
+		slot = now
+	}
+	l.next = slot.Add(l.interval)
+	l.mu.Unlock()
+
+	delay := time.Until(slot)
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func New(f letterboxd.Fetcher, s Store, cfg Config, log *slog.Logger) *Pipeline {
@@ -184,16 +232,19 @@ func (p *Pipeline) index(ctx context.Context, username string) ([]letterboxd.Wat
 		diary []letterboxd.DiaryEntry
 	)
 	sem := semaphore.NewWeighted(int64(p.cfg.IndexConcurrency))
+	// One limiter shared by the grid and the diary: they hit the same uncached
+	// origin, so their combined rate is what matters.
+	lim := &indexLimiter{interval: p.cfg.IndexMinInterval}
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		watch, err = p.indexGrid(gctx, username, sem)
+		watch, err = p.indexGrid(gctx, username, sem, lim)
 		return err
 	})
 	g.Go(func() error {
 		var err error
-		diary, err = p.indexDiary(gctx, username, sem)
+		diary, err = p.indexDiary(gctx, username, sem, lim)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -202,8 +253,8 @@ func (p *Pipeline) index(ctx context.Context, username string) ([]letterboxd.Wat
 	return watch, diary, nil
 }
 
-func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphore.Weighted) ([]letterboxd.WatchEntry, error) {
-	first, err := p.getPage(ctx, sem, fmt.Sprintf("%s/%s/films/", letterboxd.BaseURL, username))
+func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphore.Weighted, lim *indexLimiter) ([]letterboxd.WatchEntry, error) {
+	first, err := p.getPage(ctx, sem, lim, fmt.Sprintf("%s/%s/films/", letterboxd.BaseURL, username))
 	if err != nil {
 		return nil, fmt.Errorf("fetch films grid for %q: %w", username, err)
 	}
@@ -217,35 +268,95 @@ func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphor
 	}
 
 	if lastPage > 1 {
-		var mu sync.Mutex
-		g, gctx := errgroup.WithContext(ctx)
-		for page := 2; page <= lastPage; page++ {
-			page := page
-			g.Go(func() error {
-				url := fmt.Sprintf("%s/%s/films/page/%d/", letterboxd.BaseURL, username, page)
-				body, err := p.getPage(gctx, sem, url)
+		got, err := p.fanOutPages(ctx, sem, lim, lastPage,
+			func(page int) string {
+				return fmt.Sprintf("%s/%s/films/page/%d/", letterboxd.BaseURL, username, page)
+			},
+			func(body []byte) (int, error) {
+				parsed, err := letterboxd.ParseFilmsGrid(body)
 				if err != nil {
-					return fmt.Errorf("films grid page %d: %w", page, err)
+					return 0, err
 				}
-				got, err := letterboxd.ParseFilmsGrid(body)
-				if err != nil {
-					return err
-				}
-				mu.Lock()
-				entries = append(entries, got...)
-				mu.Unlock()
-				return nil
+				entries = append(entries, parsed...)
+				return len(parsed), nil
 			})
+		if err != nil {
+			return nil, fmt.Errorf("films grid: %w", err)
 		}
-		if err := g.Wait(); err != nil {
-			return nil, err
-		}
+		p.log.Debug("grid paginated", "pages", got, "advertised", lastPage)
 	}
 	return dedupeWatch(entries), nil
 }
 
-func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semaphore.Weighted) ([]letterboxd.DiaryEntry, error) {
-	first, err := p.getPage(ctx, sem, fmt.Sprintf("%s/%s/films/diary/", letterboxd.BaseURL, username))
+// fanOutPages fetches pages 2..lastPage, tolerating failures on the final
+// advertised page.
+//
+// Letterboxd's own paginator over-reports: on a 2520-film profile it links page
+// 36, then serves 403 for both page 36 and page 37 (past the end) while pages
+// 1-35 return instantly. So a failure on the last advertised page means "no more
+// data", not "the scrape failed" -- treating it as fatal would throw away 35
+// good pages. A failure on any earlier page is still a real error.
+func (p *Pipeline) fanOutPages(
+	ctx context.Context,
+	sem *semaphore.Weighted,
+	lim *indexLimiter,
+	lastPage int,
+	urlFor func(page int) string,
+	consume func(body []byte) (int, error),
+) (pagesFetched int, err error) {
+	// consume appends to a slice owned by the caller, so bodies are collected
+	// concurrently and then applied in page order, keeping results deterministic.
+	var (
+		mu      sync.Mutex
+		bodies  = make(map[int][]byte, lastPage)
+		tailErr error
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	for page := 2; page <= lastPage; page++ {
+		page := page
+		g.Go(func() error {
+			body, err := p.getPage(gctx, sem, lim, urlFor(page))
+			if err != nil {
+				if page == lastPage {
+					// The advertised last page may not exist. Record and move on.
+					mu.Lock()
+					tailErr = err
+					mu.Unlock()
+					return nil
+				}
+				return fmt.Errorf("page %d: %w", page, err)
+			}
+			mu.Lock()
+			bodies[page] = body
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return 0, err
+	}
+
+	if tailErr != nil {
+		p.log.Warn("last advertised page was unavailable; treating it as the end",
+			"page", lastPage, "err", tailErr)
+	}
+
+	for page := 2; page <= lastPage; page++ {
+		body, ok := bodies[page]
+		if !ok {
+			continue
+		}
+		if _, err := consume(body); err != nil {
+			return pagesFetched, fmt.Errorf("parse page %d: %w", page, err)
+		}
+		pagesFetched++
+	}
+	return pagesFetched, nil
+}
+
+func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semaphore.Weighted, lim *indexLimiter) ([]letterboxd.DiaryEntry, error) {
+	first, err := p.getPage(ctx, sem, lim, fmt.Sprintf("%s/%s/films/diary/", letterboxd.BaseURL, username))
 	if err != nil {
 		// A missing diary is not fatal: plenty of users log films without dating
 		// them, and every non-temporal chart still works.
@@ -265,28 +376,19 @@ func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semapho
 	}
 
 	if lastPage > 1 {
-		var mu sync.Mutex
-		g, gctx := errgroup.WithContext(ctx)
-		for page := 2; page <= lastPage; page++ {
-			page := page
-			g.Go(func() error {
-				url := fmt.Sprintf("%s/%s/films/diary/page/%d/", letterboxd.BaseURL, username, page)
-				body, err := p.getPage(gctx, sem, url)
+		if _, err := p.fanOutPages(ctx, sem, lim, lastPage,
+			func(page int) string {
+				return fmt.Sprintf("%s/%s/films/diary/page/%d/", letterboxd.BaseURL, username, page)
+			},
+			func(body []byte) (int, error) {
+				parsed, err := letterboxd.ParseDiaryPage(body)
 				if err != nil {
-					return fmt.Errorf("diary page %d: %w", page, err)
+					return 0, err
 				}
-				got, err := letterboxd.ParseDiaryPage(body)
-				if err != nil {
-					return err
-				}
-				mu.Lock()
-				entries = append(entries, got...)
-				mu.Unlock()
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return nil, err
+				entries = append(entries, parsed...)
+				return len(parsed), nil
+			}); err != nil {
+			return nil, fmt.Errorf("diary: %w", err)
 		}
 	}
 	return entries, nil
@@ -414,11 +516,15 @@ func (p *Pipeline) fetchStats(ctx context.Context, slug string) error {
 	return p.store.UpsertFilmStats(ctx, stats)
 }
 
-func (p *Pipeline) getPage(ctx context.Context, sem *semaphore.Weighted, url string) ([]byte, error) {
+func (p *Pipeline) getPage(ctx context.Context, sem *semaphore.Weighted, lim *indexLimiter, url string) ([]byte, error) {
 	if err := sem.Acquire(ctx, 1); err != nil {
 		return nil, err
 	}
 	defer sem.Release(1)
+	// Pace after acquiring, so the interval applies to issued requests.
+	if err := lim.wait(ctx); err != nil {
+		return nil, err
+	}
 	return p.fetch.Get(ctx, url)
 }
 
