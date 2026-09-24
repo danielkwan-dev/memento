@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+
+/* Tailwind 4 is CSS-first: design tokens are declared here, not in a JS config. */
+@theme {
+  --color-ink: #0b0d10;
+  --color-surface: #14181c;
+  --color-surface-2: #1b2127;
+  --color-border: #2a333c;
+  --color-muted: #8b98a5;
+  --color-text: #e6edf3;
+
+  /* Letterboxd's own accent trio, which makes the app feel of-a-piece with the
+     source data without imitating their branding. */
+  --color-accent: #00e054;
+  --color-accent-2: #40bcf4;
+  --color-accent-3: #ff8000;
+
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Respect users who ask for less motion; the progress bar animates otherwise. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Recharts injects inline SVG text; keep it legible against dark surfaces. */
+.recharts-cartesian-axis-tick text,
+.recharts-polar-angle-axis-tick text,
+.recharts-legend-item-text {
+  fill: var(--color-muted) !important;
+  font-size: 12px;
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--color-border);
+}
