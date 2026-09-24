@@ -1,0 +1,36 @@
+# Fly config for the worker process.
+#
+# Deploy: fly deploy -c fly.worker.toml
+#
+# The worker exposes an HTTP service purely so it can be woken. On this tier a
+# machine with no traffic is stopped, and an inbound HTTP request is what starts
+# it -- so the health endpoint is the wake-up mechanism, not just a probe.
+app = 'memento-worker'
+primary_region = 'yyz'
+
+[build]
+dockerfile = 'Dockerfile'
+build-target = 'worker'
+
+[env]
+MEMENTO_WORKER_PORT = '8081'
+# User grid and diary pages are not in Cloudflare's edge cache, so they stay at a
+# low concurrency; film detail pages are cached and tolerate far more.
+MEMENTO_INDEX_CONCURRENCY = '3'
+MEMENTO_DETAIL_CONCURRENCY = '12'
+
+[http_service]
+internal_port = 8081
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+
+# Deliberately no [[http_service.checks]] block: periodic health checks are
+# traffic, and traffic keeps the machine awake, which would defeat scale-to-zero
+# and burn the free allowance. The API's wake probe and the job reaper cover
+# liveness instead.
+
+[[vm]]
+size = 'shared-cpu-1x'
+memory = '512mb'

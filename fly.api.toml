@@ -1,0 +1,38 @@
+# Fly config for the API process.
+#
+# Deploy: fly deploy -c fly.api.toml
+app = 'memento-api'
+primary_region = 'yyz'
+
+[build]
+dockerfile = 'Dockerfile'
+build-target = 'api'
+
+[env]
+MEMENTO_PORT = '8080'
+# Points at the worker app's health endpoint. Enqueueing a job pings this so a
+# scaled-to-zero worker machine starts booting immediately; without it a job
+# would sit queued until the worker's own poll timer happened to wake it.
+MEMENTO_WORKER_HEALTH_URL = 'https://memento-worker.fly.dev/healthz'
+# Set MEMENTO_CORS_ORIGINS to the deployed frontend origin.
+
+[http_service]
+internal_port = 8080
+force_https = true
+# Scale to zero to stay inside the free allowance. This is exactly why the app
+# treats 'waking' as a real job phase and why the frontend probes /healthz on
+# page load.
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+
+[[http_service.checks]]
+interval = '30s'
+timeout = '5s'
+grace_period = '10s'
+method = 'GET'
+path = '/healthz'
+
+[[vm]]
+size = 'shared-cpu-1x'
+memory = '512mb'

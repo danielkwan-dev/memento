@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    # The store tests exercise real SQL (SKIP LOCKED, LISTEN/NOTIFY, partial
+    # indexes, cascades), so CI runs a real Postgres rather than mocking it.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: memento
+          POSTGRES_PASSWORD: memento
+          POSTGRES_DB: memento
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U memento -d memento"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # MEMENTO_TEST_DATABASE_URL opts the store package in; without it those tests
+      # skip, which is what keeps local runs offline by default.
+      - name: Test
+        env:
+          MEMENTO_TEST_DATABASE_URL: postgres://memento:memento@localhost:5432/memento?sslmode=disable
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Building both targets catches a broken Dockerfile before a deploy does.
+      - name: Build api image
+        run: docker build --target api -t memento-api .
+
+      - name: Build worker image
+        run: docker build --target worker -t memento-worker .
