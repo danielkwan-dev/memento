@@ -113,6 +113,58 @@ func (s *Store) EnqueueJob(ctx context.Context, username string, kind JobKind) (
 	return j, nil
 }
 
+// EnqueueImportJob creates a queued import job carrying its export archive.
+//
+// The payload rides along in the jobs row: it is small, needed once by whichever
+// worker claims the job, and deleting the job deletes it -- no object storage,
+// credentials or cleanup job required.
+func (s *Store) EnqueueImportJob(ctx context.Context, username string, payload []byte) (*Job, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	id := uuid.New()
+
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO jobs (id, username, kind, status, phase, payload)
+		VALUES ($1, $2, 'import', 'queued', 'waking', $3)
+		RETURNING `+jobColumns, id, username, payload)
+
+	j, err := scanJob(row)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrJobInFlight
+		}
+		return nil, fmt.Errorf("enqueue import job: %w", err)
+	}
+	if err := s.notifyJobAvailable(ctx); err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
+// JobPayload reads an import job's archive. Kept off the Job struct so ordinary
+// job reads and progress notifications never carry megabytes of CSV.
+func (s *Store) JobPayload(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	var payload []byte
+	err := s.pool.QueryRow(ctx, `SELECT payload FROM jobs WHERE id = $1`, id).Scan(&payload)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("job payload: %w", err)
+	}
+	return payload, nil
+}
+
+// ClearJobPayload drops the archive once the import has finished, so a finished
+// job does not keep holding the upload.
+func (s *Store) ClearJobPayload(ctx context.Context, id uuid.UUID) error {
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE jobs SET payload = NULL WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("clear job payload: %w", err)
+	}
+	return nil
+}
+
 // ActiveJobFor returns the in-flight job for a username, if any.
 func (s *Store) ActiveJobFor(ctx context.Context, username string) (*Job, error) {
 	row := s.pool.QueryRow(ctx, `

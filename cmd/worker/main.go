@@ -170,7 +170,26 @@ func runJob(ctx context.Context, st *store.Store, pipe *pipeline.Pipeline, job *
 	jobCtx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	res, err := pipe.Run(jobCtx, job.ID, job.Username)
+	var (
+		res *pipeline.Result
+		err error
+	)
+	switch job.Kind {
+	case store.KindImport:
+		// The uploaded archive travels in the jobs row; read it here rather than
+		// on the Job struct so progress notifications never carry the payload.
+		var payload []byte
+		payload, err = st.JobPayload(jobCtx, job.ID)
+		if err == nil && len(payload) == 0 {
+			err = errors.New("import job has no payload (it may have been retried after completion)")
+		}
+		if err == nil {
+			res, err = pipe.RunImport(jobCtx, job.ID, job.Username, payload)
+		}
+	default:
+		res, err = pipe.Run(jobCtx, job.ID, job.Username)
+	}
+
 	if err != nil {
 		// Shutdown is not a job failure: leave the job running so the reaper
 		// requeues it for the next worker rather than reporting failure.
@@ -187,6 +206,13 @@ func runJob(ctx context.Context, st *store.Store, pipe *pipeline.Pipeline, job *
 
 	if ferr := st.FinishJob(context.WithoutCancel(jobCtx), job.ID, ""); ferr != nil {
 		log.Error("could not mark job succeeded", "err", ferr)
+	}
+	// The archive has served its purpose; a finished job should not keep holding
+	// the upload.
+	if job.Kind == store.KindImport {
+		if cerr := st.ClearJobPayload(context.WithoutCancel(jobCtx), job.ID); cerr != nil {
+			log.Warn("could not clear import payload", "err", cerr)
+		}
 	}
 	log.Info("job succeeded",
 		"watch_entries", res.WatchEntries, "diary_entries", res.DiaryEntries,

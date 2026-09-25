@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/danielkwan-dev/memento/internal/config"
+	"github.com/danielkwan-dev/memento/internal/letterboxd"
 	"github.com/danielkwan-dev/memento/internal/stats"
 	"github.com/danielkwan-dev/memento/internal/store"
 )
@@ -75,6 +77,8 @@ func (s *Server) Routes() http.Handler {
 			r.Use(middleware.Timeout(15 * time.Second))
 			r.Post("/sync", s.handleSync)
 		})
+
+		r.Post("/import", s.handleImport)
 
 		r.Get("/jobs/{id}", s.handleJob)
 		// SSE must not sit behind a request timeout: it is a long-lived stream.
@@ -182,6 +186,78 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		resp.LastSyncedAt = &t
 	}
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// maxExportSize bounds an uploaded archive. A Letterboxd export of a very large
+// profile is a few hundred KB of CSV, so this is generous while still refusing
+// anything that would be a problem to hold in memory or in a row.
+const maxExportSize = 32 << 20 // 32 MiB
+
+// handleImport ingests a Letterboxd data export instead of scraping.
+//
+// This path skips the paginated user pages entirely -- the most aggressively
+// blocked requests in a scrape -- so it keeps working when scraping does not.
+func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "expected a multipart form with an export file")
+		return
+	}
+
+	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
+	if !usernameRe.MatchString(username) {
+		writeError(w, http.StatusBadRequest,
+			"username must be 2-32 characters of letters, digits or underscores")
+		return
+	}
+
+	file, header, err := r.FormFile("export")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "no export file was uploaded")
+		return
+	}
+	defer file.Close()
+
+	if header.Size > maxExportSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "that export is too large")
+		return
+	}
+
+	// Read through a limit reader as well: Size is client-supplied.
+	payload, err := io.ReadAll(io.LimitReader(file, maxExportSize+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the uploaded file")
+		return
+	}
+	if len(payload) > maxExportSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "that export is too large")
+		return
+	}
+
+	// Validate before enqueueing, so a bad upload fails immediately with a useful
+	// message instead of becoming a failed background job.
+	if _, err := letterboxd.ParseExportZip(payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.waker.Touch()
+
+	job, err := s.store.EnqueueImportJob(r.Context(), username, payload)
+	if err != nil {
+		if errors.Is(err, store.ErrJobInFlight) {
+			existing, lookupErr := s.store.ActiveJobFor(r.Context(), username)
+			if lookupErr != nil || existing == nil {
+				writeError(w, http.StatusConflict, "a sync for this user is already running")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, syncResponse{Job: existing, AlreadyInFli: true})
+			return
+		}
+		s.log.Error("enqueue import failed", "username", username, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not queue the import")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, syncResponse{Job: job})
 }
 
 // --- jobs ---

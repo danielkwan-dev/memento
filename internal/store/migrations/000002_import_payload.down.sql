@@ -1,0 +1,2 @@
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_payload_size;
+ALTER TABLE jobs DROP COLUMN IF EXISTS payload;
