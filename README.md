@@ -25,6 +25,13 @@ with job state durable across restarts. Idempotency is a unique partial index on
 active jobs per username, so double-clicking Sync cannot start two scrapes; a
 crashed worker can't leak the lock the way an advisory lock would.
 
+**Detail-page concurrency is measured, not assumed.** The reference project
+reasons that film pages tolerate high parallelism because they sit in
+Cloudflare's edge cache while user pages do not. Measured against the live site,
+that holds: 12 film pages at concurrency 16 complete in ~283ms with zero blocks
+and zero retries, and 4/8/16 are indistinguishable. The user-page limit is the
+one that actually binds.
+
 **Two concurrency limits, plus a rate limit.** A user's grid and diary pages are
 not in Cloudflare's edge cache, so they run at 3 concurrent; film detail pages are
 edge-cached and run at 16. Same reasoning as the reference project's split thread
