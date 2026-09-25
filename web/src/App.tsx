@@ -25,6 +25,8 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: 'idle' })
   const [input, setInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [mode, setMode] = useState<'scrape' | 'upload'>('scrape')
+  const [file, setFile] = useState<File | null>(null)
   const [serverState, setServerState] = useState<ServerState>('unknown')
   const wakeStarted = useRef(false)
 
@@ -95,10 +97,14 @@ export default function App() {
     e.preventDefault()
     const username = input.trim().toLowerCase()
     if (!username || submitting) return
+    if (mode === 'upload' && !file) return
 
     setSubmitting(true)
     try {
-      const res = await api.sync(username)
+      const res =
+        mode === 'upload' && file
+          ? await api.import(username, file)
+          : await api.sync(username)
       setView({ kind: 'syncing', username, jobId: res.job.id })
     } catch (err) {
       setView({
@@ -150,27 +156,79 @@ export default function App() {
 
         {(view.kind === 'idle' || view.kind === 'failed') && (
           <>
-            <form onSubmit={handleSubmit} className="flex gap-2">
-              <label htmlFor="username" className="sr-only">
-                Letterboxd username
-              </label>
-              <input
-                id="username"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="letterboxd username"
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-text placeholder:text-muted/70 focus:border-accent focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || submitting}
-                className="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {submitting ? 'Starting…' : 'Analyse'}
-              </button>
+            <div className="mb-3 flex gap-1 rounded-lg border border-border bg-surface p-1">
+              {(['scrape', 'upload'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
+                  className={`flex-1 rounded-md px-3 py-2 text-xs font-medium transition-colors ${
+                    mode === m
+                      ? 'bg-surface-2 text-text'
+                      : 'text-muted hover:text-text'
+                  }`}
+                >
+                  {m === 'scrape' ? 'By username' : 'Upload export'}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-2">
+              <div className="flex gap-2">
+                <label htmlFor="username" className="sr-only">
+                  Letterboxd username
+                </label>
+                <input
+                  id="username"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="letterboxd username"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-text placeholder:text-muted/70 focus:border-accent focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    !input.trim() ||
+                    submitting ||
+                    (mode === 'upload' && !file)
+                  }
+                  className="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {submitting ? 'Starting…' : 'Analyse'}
+                </button>
+              </div>
+
+              {mode === 'upload' && (
+                <div>
+                  <label
+                    htmlFor="export"
+                    className="block cursor-pointer rounded-lg border border-dashed border-border bg-surface px-4 py-3 text-center text-sm text-muted transition-colors hover:border-muted hover:text-text"
+                  >
+                    {file ? (
+                      <span className="text-text">{file.name}</span>
+                    ) : (
+                      'Choose your letterboxd export .zip'
+                    )}
+                  </label>
+                  <input
+                    id="export"
+                    type="file"
+                    accept=".zip,application/zip"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    className="sr-only"
+                  />
+                  <p className="mt-2 text-xs leading-relaxed text-muted/80">
+                    Get it from Letterboxd → Settings → Data → Export Your Data.
+                    This skips reading your profile pages, which is the part most
+                    likely to be rate limited, so it is the more reliable route
+                    for large accounts.
+                  </p>
+                </div>
+              )}
             </form>
 
             {serverState === 'waking' && (

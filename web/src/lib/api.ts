@@ -137,6 +137,31 @@ export const api = {
       body: JSON.stringify({ username }),
     }),
 
+  /**
+   * Uploads a Letterboxd data export instead of scraping.
+   *
+   * This skips the paginated profile pages, which are the most heavily blocked
+   * part of a scrape, so it works when scraping does not.
+   */
+  import: async (username: string, file: File): Promise<SyncResponse> => {
+    const form = new FormData()
+    form.append('username', username)
+    form.append('export', file)
+    // No Content-Type header: the browser must set the multipart boundary.
+    const res = await fetch('/api/v1/import', { method: 'POST', body: form })
+    if (!res.ok) {
+      let message = `upload failed (${res.status})`
+      try {
+        const body = (await res.json()) as { error?: string }
+        if (body.error) message = body.error
+      } catch {
+        // Non-JSON error body; keep the status-based message.
+      }
+      throw new ApiError(message, res.status)
+    }
+    return (await res.json()) as SyncResponse
+  },
+
   job: (id: string) => request<Job>(`/api/v1/jobs/${id}`),
 
   stats: (username: string) =>
