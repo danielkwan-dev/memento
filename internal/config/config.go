@@ -22,8 +22,13 @@ type Config struct {
 	// are NOT in Cloudflare's edge cache, so they must stay low.
 	IndexConcurrency int
 	// DetailConcurrency bounds requests to film detail pages, which ARE edge
-	// cached and therefore tolerate far more parallelism.
+	// cached and tolerate far more parallelism (measured: 12 films at 16-concurrent
+	// in ~281ms, zero blocks).
 	DetailConcurrency int
+	// DetailIntervalMS paces detail requests, in milliseconds.
+	DetailIntervalMS int
+	// IndexIntervalMS paces the uncached grid/diary requests, in milliseconds.
+	IndexIntervalMS int
 
 	// DetailsTTL covers near-immutable metadata (genres, runtime, cast).
 	DetailsTTL time.Duration
@@ -41,7 +46,9 @@ func Load() (*Config, error) {
 		WorkerHealthURL:   env("MEMENTO_WORKER_HEALTH_URL", ""),
 		CORSOrigins:       envList("MEMENTO_CORS_ORIGINS", []string{"http://localhost:5173"}),
 		IndexConcurrency:  envInt("MEMENTO_INDEX_CONCURRENCY", 3),
-		DetailConcurrency: envInt("MEMENTO_DETAIL_CONCURRENCY", 16),
+		DetailConcurrency: envInt("MEMENTO_DETAIL_CONCURRENCY", 12),
+		DetailIntervalMS:  envInt("MEMENTO_DETAIL_INTERVAL_MS", 120),
+		IndexIntervalMS:   envInt("MEMENTO_INDEX_INTERVAL_MS", 1500),
 		DetailsTTL:        envDuration("MEMENTO_DETAILS_TTL", 90*24*time.Hour),
 		StatsTTL:          envDuration("MEMENTO_STATS_TTL", 7*24*time.Hour),
 		LogLevel:          env("MEMENTO_LOG_LEVEL", "info"),

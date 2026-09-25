@@ -47,9 +47,20 @@ type Config struct {
 	// curl gets 403 on every /page/N/ URL even when page 1 returns 200 -- so this
 	// is the setting that decides whether a large profile works at all.
 	IndexMinInterval time.Duration
-	// DetailConcurrency bounds requests to film pages, which ARE edge cached and
-	// therefore tolerate much more parallelism.
+	// DetailConcurrency bounds requests to film detail pages, which ARE edge
+	// cached and therefore tolerate much more parallelism. Measured: 12 films at
+	// concurrency 16 return in ~281ms with zero blocks or retries.
 	DetailConcurrency int
+	// DetailMinInterval paces detail requests.
+	//
+	// Cloudflare's limiting here is per-IP and cumulative over time rather than
+	// per-request: a long scrape can earn a block that then clears on its own
+	// after a cooldown, and while it lasts EVERY request fails regardless of
+	// concurrency or fingerprint (verified -- plain curl kept getting 200 on the
+	// same URLs throughout). Modest pacing spends the budget more slowly on a
+	// multi-thousand-film scrape; it is not a fix for an active block, which only
+	// waiting resolves.
+	DetailMinInterval time.Duration
 	DetailsTTL        time.Duration
 	StatsTTL          time.Duration
 	// MaxFilmFailureRatio is the share of per-film fetch failures tolerated
@@ -62,7 +73,8 @@ func DefaultConfig() Config {
 	return Config{
 		IndexConcurrency:    3,
 		IndexMinInterval:    1500 * time.Millisecond,
-		DetailConcurrency:   16,
+		DetailConcurrency:   12,
+		DetailMinInterval:   120 * time.Millisecond,
 		DetailsTTL:          90 * 24 * time.Hour,
 		StatsTTL:            7 * 24 * time.Hour,
 		MaxFilmFailureRatio: 0.2,
@@ -76,17 +88,17 @@ type Pipeline struct {
 	log   *slog.Logger
 }
 
-// indexLimiter paces index requests. Separate from the semaphore because the two
+// rateLimiter paces requests. Separate from the semaphore because the two
 // constrain different things: the semaphore caps requests in flight, this caps
-// requests per second.
-type indexLimiter struct {
+// requests per second. Cloudflare limits the latter.
+type rateLimiter struct {
 	mu       sync.Mutex
 	interval time.Duration
 	next     time.Time
 }
 
 // wait blocks until this goroutine's turn, or ctx is done.
-func (l *indexLimiter) wait(ctx context.Context) error {
+func (l *rateLimiter) wait(ctx context.Context) error {
 	if l == nil || l.interval <= 0 {
 		return nil
 	}
@@ -234,7 +246,7 @@ func (p *Pipeline) index(ctx context.Context, username string) ([]letterboxd.Wat
 	sem := semaphore.NewWeighted(int64(p.cfg.IndexConcurrency))
 	// One limiter shared by the grid and the diary: they hit the same uncached
 	// origin, so their combined rate is what matters.
-	lim := &indexLimiter{interval: p.cfg.IndexMinInterval}
+	lim := &rateLimiter{interval: p.cfg.IndexMinInterval}
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -253,7 +265,7 @@ func (p *Pipeline) index(ctx context.Context, username string) ([]letterboxd.Wat
 	return watch, diary, nil
 }
 
-func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphore.Weighted, lim *indexLimiter) ([]letterboxd.WatchEntry, error) {
+func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphore.Weighted, lim *rateLimiter) ([]letterboxd.WatchEntry, error) {
 	first, err := p.getPage(ctx, sem, lim, fmt.Sprintf("%s/%s/films/", letterboxd.BaseURL, username))
 	if err != nil {
 		return nil, fmt.Errorf("fetch films grid for %q: %w", username, err)
@@ -299,7 +311,7 @@ func (p *Pipeline) indexGrid(ctx context.Context, username string, sem *semaphor
 func (p *Pipeline) fanOutPages(
 	ctx context.Context,
 	sem *semaphore.Weighted,
-	lim *indexLimiter,
+	lim *rateLimiter,
 	lastPage int,
 	urlFor func(page int) string,
 	consume func(body []byte) (int, error),
@@ -355,7 +367,7 @@ func (p *Pipeline) fanOutPages(
 	return pagesFetched, nil
 }
 
-func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semaphore.Weighted, lim *indexLimiter) ([]letterboxd.DiaryEntry, error) {
+func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semaphore.Weighted, lim *rateLimiter) ([]letterboxd.DiaryEntry, error) {
 	first, err := p.getPage(ctx, sem, lim, fmt.Sprintf("%s/%s/films/diary/", letterboxd.BaseURL, username))
 	if err != nil {
 		// A missing diary is not fatal: plenty of users log films without dating
@@ -402,6 +414,9 @@ func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semapho
 // in Run.
 func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.StaleSplit, total int) (details, stats, failures int, err error) {
 	sem := semaphore.NewWeighted(int64(p.cfg.DetailConcurrency))
+	// Detail pages need pacing too: an edge-cache MISS reaches the origin and is
+	// rate limited, and a real profile's long tail is mostly misses.
+	lim := &rateLimiter{interval: p.cfg.DetailMinInterval}
 	var (
 		doneCount    atomic.Int64
 		detailCount  atomic.Int64
@@ -438,6 +453,9 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 			}
 			defer sem.Release(1)
 
+			if err := lim.wait(gctx); err != nil {
+				return err
+			}
 			if err := p.fetchFilm(gctx, slug); err != nil {
 				// Cancellation is the caller's decision, not a film failure.
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -461,6 +479,9 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 			}
 			defer sem.Release(1)
 
+			if err := lim.wait(gctx); err != nil {
+				return err
+			}
 			if err := p.fetchStats(gctx, slug); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
@@ -516,7 +537,7 @@ func (p *Pipeline) fetchStats(ctx context.Context, slug string) error {
 	return p.store.UpsertFilmStats(ctx, stats)
 }
 
-func (p *Pipeline) getPage(ctx context.Context, sem *semaphore.Weighted, lim *indexLimiter, url string) ([]byte, error) {
+func (p *Pipeline) getPage(ctx context.Context, sem *semaphore.Weighted, lim *rateLimiter, url string) ([]byte, error) {
 	if err := sem.Acquire(ctx, 1); err != nil {
 		return nil, err
 	}

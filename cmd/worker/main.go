@@ -82,6 +82,8 @@ func run() error {
 	pipeCfg := pipeline.DefaultConfig()
 	pipeCfg.IndexConcurrency = cfg.IndexConcurrency
 	pipeCfg.DetailConcurrency = cfg.DetailConcurrency
+	pipeCfg.IndexMinInterval = time.Duration(cfg.IndexIntervalMS) * time.Millisecond
+	pipeCfg.DetailMinInterval = time.Duration(cfg.DetailIntervalMS) * time.Millisecond
 	pipeCfg.DetailsTTL = cfg.DetailsTTL
 	pipeCfg.StatsTTL = cfg.StatsTTL
 	pipe := pipeline.New(fetcher, st, pipeCfg, log)

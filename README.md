@@ -28,9 +28,9 @@ crashed worker can't leak the lock the way an advisory lock would.
 **Detail-page concurrency is measured, not assumed.** The reference project
 reasons that film pages tolerate high parallelism because they sit in
 Cloudflare's edge cache while user pages do not. Measured against the live site,
-that holds: 12 film pages at concurrency 16 complete in ~283ms with zero blocks
-and zero retries, and 4/8/16 are indistinguishable. The user-page limit is the
-one that actually binds.
+that holds: 12 film pages at concurrency 16 complete in ~281ms with zero blocks
+and zero retries, and 4/8/16 are indistinguishable. The user-page limit is the one
+that actually binds.
 
 **Two concurrency limits, plus a rate limit.** A user's grid and diary pages are
 not in Cloudflare's edge cache, so they run at 3 concurrent; film detail pages are
@@ -57,10 +57,20 @@ a real browser's. Go's `net/http` is trivially identifiable, so the fetcher uses
 ordering. The difference is measurable: `/csi/film/{slug}/stats/` returns **403**
 to curl — even with a spoofed `User-Agent` — and **200** to this client.
 
-**Blocks are usually rate limiting, not detection.** A blocked URL succeeds
-minutes later on the same profile. Rotating fingerprints eagerly made it *worse*,
-because it retries a hot path under a fresh identity. So rotation needs a long
-block streak, and blocked requests back off harder instead.
+**Blocks are rate limiting, not fingerprint detection — and the limit is per-IP
+and cumulative.** This one took real measurement to pin down. Mid-scrape, every
+request can start failing while plain `curl` keeps getting 200 on the same URLs,
+which looks exactly like the fingerprint being rejected. It is not: after a
+cooldown, all six TLS profiles return 200 on the very URLs that had just failed 24
+times in a row. What actually happens is that a long scrape spends a per-IP budget
+and earns a temporary block, during which *nothing* gets through regardless of
+concurrency or fingerprint.
+
+Two consequences. Rotating fingerprints eagerly makes it worse, because it retries
+a hot path under a fresh identity, so rotation needs a long block streak and
+blocked requests simply back off harder. And pacing spends the budget more slowly
+but cannot clear an active block — only waiting does. The shared film cache is the
+real mitigation, since it removes most requests entirely.
 
 **Failure is proportionate.** One deleted film must not abandon a 2000-film
 scrape, so per-film failures are counted, not propagated. But if more than 20% of
