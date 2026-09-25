@@ -25,10 +25,23 @@ with job state durable across restarts. Idempotency is a unique partial index on
 active jobs per username, so double-clicking Sync cannot start two scrapes; a
 crashed worker can't leak the lock the way an advisory lock would.
 
-**Two concurrency limits, not one.** A user's grid and diary pages are not in
-Cloudflare's edge cache, so they run at 3 concurrent. Film detail pages are cached
-at the edge and run at 16. Same reasoning as the reference project's split thread
+**Two concurrency limits, plus a rate limit.** A user's grid and diary pages are
+not in Cloudflare's edge cache, so they run at 3 concurrent; film detail pages are
+edge-cached and run at 16. Same reasoning as the reference project's split thread
 pools, expressed as two `semaphore.Weighted` instances.
+
+Concurrency alone turned out to be insufficient: a semaphore bounds requests *in
+flight*, not requests *per second*, and Cloudflare limits the latter. A 36-page
+profile at 3-concurrent is still a burst. Index requests are therefore also paced
+to a minimum interval — measured, not guessed: unpaced and at 400ms the index
+phase gets blocked partway through; ~1.5s apart it completes with zero retries.
+
+**Letterboxd's paginator over-reports.** On a 2520-film profile it links page 36,
+then serves 403 for page 36 *and* page 37 (past the end), while pages 1–35 return
+in under 300ms. Because `errgroup` cancels siblings on the first error, one bogus
+page was discarding 35 good ones. A failure on the *last advertised* page now
+means "no more data"; a failure on any earlier page stays fatal, since silently
+dropping page 3 of 10 would store an incomplete profile as if it were complete.
 
 **TLS fingerprint spoofing.** Letterboxd rejects clients whose TLS handshake isn't
 a real browser's. Go's `net/http` is trivially identifiable, so the fetcher uses
