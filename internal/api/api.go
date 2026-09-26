@@ -81,6 +81,9 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/import", s.handleImport)
 
 		r.Get("/jobs/{id}", s.handleJob)
+		// Lets a user abandon a job that is stuck -- the one-active-job-per-user
+		// index otherwise blocks them from retrying at all.
+		r.Post("/jobs/{id}/cancel", s.handleCancelJob)
 		// SSE must not sit behind a request timeout: it is a long-lived stream.
 		r.Get("/jobs/{id}/events", s.handleJobEvents)
 
@@ -286,6 +289,30 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+// handleCancelJob abandons an in-flight job.
+//
+// The unique partial index allows one active job per username, which stops
+// duplicate scrapes but also means a job wedged in 'queued' (a worker that died
+// between claim and progress, say) locks the user out. This is the escape hatch.
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	cancelled, err := s.store.CancelJob(r.Context(), id)
+	if err != nil {
+		s.log.Error("cancel failed", "job", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not cancel the job")
+		return
+	}
+	if !cancelled {
+		writeError(w, http.StatusNotFound, "no active job with that id")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 // --- stats ---

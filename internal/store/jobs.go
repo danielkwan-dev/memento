@@ -287,6 +287,20 @@ func (s *Store) FinishJob(ctx context.Context, id uuid.UUID, errMsg string, bloc
 	return s.publishProgress(ctx, j)
 }
 
+// CancelJob marks an active job cancelled, freeing the per-username slot so the
+// user can start another. Returns false if the job was already terminal.
+func (s *Store) CancelJob(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET status = 'cancelled', phase = 'done', finished_at = now(),
+		    locked_at = NULL, error = COALESCE(error, 'cancelled by the user')
+		WHERE id = $1 AND status IN ('queued', 'running')`, id)
+	if err != nil {
+		return false, fmt.Errorf("cancel job: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // ReapStaleJobs requeues jobs whose worker died mid-run, so a crash or a
 // scaled-to-zero machine does not leave a user's job stuck forever. Jobs that
 // have already burned through maxAttempts are failed instead of retried.

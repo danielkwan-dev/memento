@@ -60,10 +60,13 @@ services:
         value: "1"
       - key: MEMENTO_INDEX_INTERVAL_MS
         value: "6000"
-      # Film pages are edge-cached and far more forgiving, but cache misses reach
-      # the origin, so this stays modest too.
+      # Film detail pages are a different story from profile pages: they sit in
+      # Cloudflare's edge cache and measured clean at 16 concurrent in ~281ms with
+      # zero blocks. Throttling them as hard as the profile pages was a mistake --
+      # it made an export import (which never touches the gated URLs at all) take
+      # over an hour for a large library.
       - key: MEMENTO_DETAIL_CONCURRENCY
-        value: "3"
+        value: "12"
       - key: MEMENTO_DETAIL_INTERVAL_MS
-        value: "800"
+        value: "100"
       - fromGroup: memento-db
