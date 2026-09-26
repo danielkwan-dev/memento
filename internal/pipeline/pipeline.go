@@ -81,6 +81,10 @@ func DefaultConfig() Config {
 	}
 }
 
+// ErrTooManyFailures aborts a hydrate run whose failure rate has already passed
+// the tolerated threshold, rather than grinding through the remaining films.
+var ErrTooManyFailures = errors.New("pipeline: upstream is failing too many requests")
+
 type Pipeline struct {
 	fetch letterboxd.Fetcher
 	store Store
@@ -198,6 +202,11 @@ func (p *Pipeline) Run(ctx context.Context, jobID uuid.UUID, username string) (*
 
 	fetched, statsFetched, failures, err := p.hydrate(ctx, jobID, split, total)
 	if err != nil {
+		if errors.Is(err, ErrTooManyFailures) {
+			// Almost always upstream rate limiting, which clears on its own, so
+			// say so instead of reporting an opaque failure.
+			return nil, fmt.Errorf("%w -- Letterboxd is rate limiting this scrape; try again in a few minutes", err)
+		}
 		return nil, err
 	}
 	res.FilmsFetched = fetched
@@ -466,7 +475,16 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 			} else {
 				detailCount.Add(1)
 			}
-			doneCount.Add(1)
+			done := doneCount.Add(1)
+			// Trip the breaker as soon as the run is clearly doomed. Without
+			// this, a blocking upstream makes every remaining film burn its full
+			// retry budget (6 attempts backing off to 60s) before the ratio check
+			// in Run ever gets to look -- measured, that turned a 242-film job
+			// into a 25-minute hang instead of a fast, clear failure.
+			if p.breakerTripped(int(done), int(failureCount.Load()), total) {
+				return fmt.Errorf("%w: %d of the first %d films failed",
+					ErrTooManyFailures, failureCount.Load(), done)
+			}
 			return nil
 		})
 	}
@@ -491,7 +509,11 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 			} else {
 				statsCount.Add(1)
 			}
-			doneCount.Add(1)
+			done := doneCount.Add(1)
+			if p.breakerTripped(int(done), int(failureCount.Load()), total) {
+				return fmt.Errorf("%w: %d of the first %d films failed",
+					ErrTooManyFailures, failureCount.Load(), done)
+			}
 			return nil
 		})
 	}
@@ -502,6 +524,40 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 	stopProgress()
 
 	return int(detailCount.Load()), int(statsCount.Load()), int(failureCount.Load()), nil
+}
+
+const (
+	// breakerMinSamples is how many films must be attempted before the failure
+	// ratio is trusted at all. Without a floor, a couple of early failures would
+	// trip the breaker on a small profile.
+	breakerMinSamples = 40
+
+	// breakerSlack multiplies the tolerated ratio while the run is in flight.
+	//
+	// Failures are not evenly distributed: films are fetched in roughly slug
+	// order, so a cluster of deleted or renamed films early on makes the running
+	// ratio look far worse than the final one. A test with a true 10% failure
+	// rate saw 6 of its first 25 fail for exactly this reason. The breaker
+	// therefore only fires well clear of the threshold -- it exists to escape a
+	// hopeless run, not to enforce the limit, which Run still does exactly once
+	// all the films are in.
+	breakerSlack = 2.0
+)
+
+// breakerTripped reports whether the failure rate so far is so far past the
+// tolerated threshold that finishing is pointless, letting a doomed run stop
+// early instead of waiting for every remaining film to exhaust its retries.
+func (p *Pipeline) breakerTripped(done, failures, total int) bool {
+	if done < breakerMinSamples || total < breakerMinSamples {
+		return false
+	}
+	limit := p.cfg.MaxFilmFailureRatio * breakerSlack
+	if limit >= 1 {
+		// A tolerant configuration disables the breaker rather than making it
+		// unreachable-but-live.
+		return false
+	}
+	return float64(failures)/float64(done) > limit
 }
 
 // fetchFilm pulls a film's detail page and its stats fragment, then stores both.
