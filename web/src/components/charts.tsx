@@ -16,7 +16,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { Bucket, DayCount, RatingBucket } from '../lib/api'
-import { EmptyChart, tooltipStyle } from './primitives'
+import { EmptyChart, shortLabel, tooltipStyle } from './primitives'
 import { AXIS, GRID, LBX, heatStep } from '../lib/viz'
 
 /**
@@ -81,10 +81,17 @@ export function RankedBars({
   const rows = (data ?? []).slice(0, limit)
   if (rows.length === 0) return <EmptyChart message="Not enough data" />
 
+  // Letterboxd's theme names are whole sentences. Shortening them at a word
+  // boundary keeps the identifying part readable AND leaves the bars room to be
+  // compared, which a 240px gutter did not. The full name stays in the tooltip.
+  const shown = rows.map((r) => ({ ...r, short: shortLabel(r.label) }))
+  const longest = Math.max(...shown.map((r) => r.short.length))
+  const labelWidth = Math.min(Math.max(96, longest * 6.1), 175)
+
   return (
-    <ResponsiveContainer width="100%" height={Math.max(220, rows.length * 26)}>
+    <ResponsiveContainer width="100%" height={Math.max(220, rows.length * 28)}>
       <BarChart
-        data={rows}
+        data={shown}
         layout="vertical"
         margin={{ top: 4, right: 16, left: 8, bottom: 4 }}
         barCategoryGap={2 /* 2px surface gap between adjacent fills */}
@@ -93,13 +100,17 @@ export function RankedBars({
         <XAxis type="number" {...AXIS_PROPS} allowDecimals={false} />
         <YAxis
           type="category"
-          dataKey="label"
+          dataKey="short"
           {...AXIS_PROPS}
-          width={128}
+          tick={{ fill: AXIS, fontSize: 11 }}
+          width={labelWidth}
           interval={0}
         />
         <Tooltip
           {...tooltipStyle()}
+          labelFormatter={(_l: unknown, payload: readonly { payload?: Bucket }[]) =>
+            payload?.[0]?.payload?.label ?? ''
+          }
           formatter={(value: unknown, _name: unknown, item: unknown) => {
             const n = typeof value === 'number' ? value : Number(value ?? 0)
             const avg = (item as { payload?: Bucket } | undefined)?.payload

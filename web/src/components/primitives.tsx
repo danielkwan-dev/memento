@@ -90,3 +90,20 @@ export function formatCount(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
 }
+
+/**
+ * Shortens a long category label for an axis.
+ *
+ * Letterboxd's theme names are sentences ("Surreal and thought-provoking visions
+ * of life and death"), which either squeeze the bars to nothing or truncate into
+ * meaninglessness. Cutting at a word boundary near the limit keeps the part that
+ * identifies the theme; the full text stays in the tooltip.
+ */
+export function shortLabel(label: string, max = 26): string {
+  if (label.length <= max) return label
+  const cut = label.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  // Only break on a word boundary if it is not leaving a stub.
+  const base = lastSpace > max * 0.55 ? cut.slice(0, lastSpace) : cut
+  return base.replace(/[\s,.:;-]+$/, '') + '…'
+}

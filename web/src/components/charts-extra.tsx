@@ -19,7 +19,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { Bucket, MonthAvg, ScatterPoint } from '../lib/api'
-import { EmptyChart, tooltipStyle } from './primitives'
+import { EmptyChart, shortLabel, tooltipStyle } from './primitives'
 import { AXIS, GRID, LBX, LBX_MUTED } from '../lib/viz'
 
 const AXIS_PROPS = {
@@ -27,6 +27,63 @@ const AXIS_PROPS = {
   tick: { fill: AXIS, fontSize: 12 },
   tickLine: false,
 } as const
+
+/**
+ * Wraps a long label onto up to two lines for a radar's angle axis.
+ *
+ * Letterboxd's theme names run to 55 characters ("Surreal and thought-provoking
+ * visions of life and death"), which overlap their neighbours badly when drawn
+ * radially. Two short lines read cleanly; anything longer is truncated, with the
+ * full text still available on hover.
+ */
+function RadialTick({
+  payload,
+  x,
+  y,
+  textAnchor,
+  maxChars = 14,
+}: {
+  payload?: { value?: string }
+  x?: number
+  y?: number
+  textAnchor?: string
+  maxChars?: number
+}) {
+  const full = String(payload?.value ?? '')
+  const words = full.split(' ')
+  const lines: string[] = []
+  let line = ''
+  for (const w of words) {
+    if (line && (line + ' ' + w).length > maxChars) {
+      lines.push(line)
+      line = w
+      if (lines.length === 2) break
+    } else {
+      line = line ? line + ' ' + w : w
+    }
+  }
+  if (lines.length < 2 && line) lines.push(line)
+  if (lines.length === 2 && lines.join(' ').length < full.length) {
+    lines[1] = lines[1].replace(/\s*\S*$/, '') + '…'
+  }
+
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor={textAnchor as 'start' | 'middle' | 'end'}
+      fill={AXIS}
+      fontSize={10}
+    >
+      <title>{full}</title>
+      {lines.map((l, i) => (
+        <tspan key={i} x={x} dy={i === 0 ? 0 : 11}>
+          {l}
+        </tspan>
+      ))}
+    </text>
+  )
+}
 
 function numFormatter(fn: (n: number) => string) {
   return (value: unknown): [string, string] => {
@@ -201,11 +258,19 @@ export function CategoryRadar({
   const rows = (data ?? []).slice(0, limit)
   if (rows.length < 3) return <EmptyChart message="Not enough categories" />
 
+  // Long labels need room at the edges and fewer spokes to sit between, so the
+  // radius shrinks as the labels get longer.
+  // Pre-shorten, so the two-line tick has something that fits rather than a
+  // sentence it has to amputate.
+  const shown = rows.map((r) => ({ ...r, label: shortLabel(r.label, 24) }))
+  const longest = Math.max(...shown.map((r) => r.label.length))
+  const outerRadius = longest > 18 ? '52%' : longest > 12 ? '60%' : '68%'
+
   return (
-    <ResponsiveContainer width="100%" height={300}>
-      <RadarChart data={rows} outerRadius="70%">
+    <ResponsiveContainer width="100%" height={longest > 24 ? 340 : 300}>
+      <RadarChart data={shown} outerRadius={outerRadius} margin={{ top: 16, right: 16, bottom: 16, left: 16 }}>
         <PolarGrid stroke={GRID} />
-        <PolarAngleAxis dataKey="label" tick={{ fill: AXIS, fontSize: 11 }} />
+        <PolarAngleAxis dataKey="label" tick={<RadialTick />} />
         <PolarRadiusAxis
           tick={{ fill: AXIS, fontSize: 10 }}
           stroke={GRID}
