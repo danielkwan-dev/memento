@@ -72,10 +72,24 @@ blocked requests simply back off harder. And pacing spends the budget more slowl
 but cannot clear an active block — only waiting does. The shared film cache is the
 real mitigation, since it removes most requests entirely.
 
-**Failure is proportionate.** One deleted film must not abandon a 2000-film
-scrape, so per-film failures are counted, not propagated. But if more than 20% of
-films fail, that is a broken parser rather than missing films, and the job fails
-loudly instead of storing a gutted profile.
+**Failure is proportionate — and fast.** One deleted film must not abandon a
+2000-film scrape, so per-film failures are counted, not propagated. If more than
+20% fail, that is a broken parser or a blocking upstream rather than missing films,
+and the job fails loudly instead of storing a gutted profile.
+
+That design had a structural flaw worth recording, found by running against a live
+profile while rate limited: because per-film failures return `nil`, the ratio check
+only sees totals *after* every film has burned 6 attempts backing off to 60s. A
+242-film job took the full 25-minute timeout to report a failure it could have
+called after the first handful. A circuit breaker now aborts hydrate once the
+running rate is hopeless.
+
+Calibrating it needed a second pass. Failures cluster — films are fetched in
+roughly slug order, so an early run of deleted films makes the in-flight ratio look
+far worse than the final one (a test with a true 10% rate saw 6 of its first 25
+fail). The breaker therefore needs 40 samples and 2x slack over the threshold: it
+exists to escape a hopeless run, not to enforce the limit, which the final check
+still does.
 
 ## Cold start
 
