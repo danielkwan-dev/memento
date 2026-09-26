@@ -107,3 +107,29 @@ export function shortLabel(label: string, max = 26): string {
   const base = lastSpace > max * 0.55 ? cut.slice(0, lastSpace) : cut
   return base.replace(/[\s,.:;-]+$/, '') + '…'
 }
+
+/**
+ * A small spinning ring.
+ *
+ * Pure CSS rather than an SVG animation so it keeps turning even while the main
+ * thread is busy parsing a large stats payload -- which is exactly when the user
+ * most needs to see that something is happening.
+ */
+export function Spinner({
+  className = '',
+  label,
+}: {
+  className?: string
+  label?: string
+}) {
+  return (
+    <span className={`inline-flex items-center gap-2 ${className}`}>
+      <span
+        aria-hidden
+        className="size-4 animate-spin rounded-full border-2 border-border border-t-accent"
+      />
+      {label && <span className="text-sm text-muted">{label}</span>}
+      <span className="sr-only">{label ?? 'Loading'}</span>
+    </span>
+  )
+}

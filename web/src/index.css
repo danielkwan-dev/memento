@@ -54,3 +54,62 @@ body {
 .recharts-cartesian-grid line {
   stroke: var(--color-border);
 }
+
+/* A sweeping highlight for the progress bar.
+   Used while a phase is running but has no countable progress (the index phase
+   reports 0/0 while it pages through a profile), so the bar still reads as
+   working rather than stuck. */
+@keyframes memento-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 33%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-ink) 45%, transparent),
+    transparent
+  );
+  animation: memento-sweep 1.6s ease-in-out infinite;
+}
+
+/* An indeterminate bar for when there is no percentage to show at all. */
+@keyframes memento-indeterminate {
+  0% {
+    left: -40%;
+    width: 40%;
+  }
+  50% {
+    width: 55%;
+  }
+  100% {
+    left: 100%;
+    width: 40%;
+  }
+}
+
+.indeterminate::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  animation: memento-indeterminate 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sweep::after,
+  .indeterminate::after {
+    animation: none;
+  }
+}

@@ -1,5 +1,6 @@
 import { overallProgress, phaseLabels } from '../lib/api'
 import type { JobPhase, JobProgress } from '../lib/api'
+import { Spinner } from './primitives'
 
 const phaseOrder: JobPhase[] = [
   'waking',
@@ -22,28 +23,45 @@ export function SyncProgress({
   const pct = Math.round(overallProgress(progress) * 100)
   const currentIndex = phaseOrder.indexOf(phase)
 
+  // The index phase pages through a profile without a countable total, so there
+  // is no honest percentage to show. An indeterminate bar says "working" without
+  // inventing progress; only hydrate knows how many films there are.
+  const indeterminate =
+    phase === 'waking' ||
+    phase === 'resolve' ||
+    (phase === 'index' && (progress?.films_total ?? 0) === 0)
+
   return (
     <div className="mx-auto w-full max-w-xl">
       <div className="rounded-xl border border-border bg-surface p-6">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-base font-semibold">
-            Analysing <span className="text-accent">{username}</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="flex items-center gap-2.5 text-base font-semibold">
+            <Spinner />
+            <span>
+              Analysing <span className="text-accent">{username}</span>
+            </span>
           </h2>
-          <span className="text-sm tabular-nums text-muted">{pct}%</span>
+          {!indeterminate && (
+            <span className="text-sm tabular-nums text-muted">{pct}%</span>
+          )}
         </div>
 
         <div
-          className="mt-4 h-2 w-full overflow-hidden rounded-full bg-surface-2"
+          className={`relative mt-4 h-2 w-full overflow-hidden rounded-full bg-surface-2 ${
+            indeterminate ? 'indeterminate' : ''
+          }`}
           role="progressbar"
-          aria-valuenow={pct}
+          aria-valuenow={indeterminate ? undefined : pct}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label="Sync progress"
         >
-          <div
-            className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
-            style={{ width: `${Math.max(pct, 2)}%` }}
-          />
+          {!indeterminate && (
+            <div
+              className="sweep relative h-full overflow-hidden rounded-full bg-accent transition-[width] duration-500 ease-out"
+              style={{ width: `${Math.max(pct, 2)}%` }}
+            />
+          )}
         </div>
 
         <p className="mt-4 text-sm text-text">
@@ -87,16 +105,21 @@ export function SyncProgress({
               i < currentIndex ? 'done' : i === currentIndex ? 'active' : 'todo'
             return (
               <li key={p} className="flex items-center gap-2.5 text-xs">
-                <span
-                  aria-hidden
-                  className={
-                    state === 'done'
-                      ? 'size-1.5 rounded-full bg-accent'
-                      : state === 'active'
-                        ? 'size-1.5 animate-pulse rounded-full bg-accent-2'
-                        : 'size-1.5 rounded-full bg-border'
-                  }
-                />
+                {state === 'active' ? (
+                  <span
+                    aria-hidden
+                    className="size-3 shrink-0 animate-spin rounded-full border-2 border-border border-t-accent-2"
+                  />
+                ) : (
+                  <span
+                    aria-hidden
+                    className={
+                      state === 'done'
+                        ? 'size-3 shrink-0 rounded-full bg-accent/80'
+                        : 'size-3 shrink-0 rounded-full border-2 border-border'
+                    }
+                  />
+                )}
                 <span
                   className={
                     state === 'todo'

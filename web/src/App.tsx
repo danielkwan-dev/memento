@@ -3,6 +3,7 @@ import { ApiError, api } from './lib/api'
 import type { Stats } from './lib/api'
 import { useJobProgress } from './hooks/useJobProgress'
 import { SyncProgress } from './components/SyncProgress'
+import { Spinner } from './components/primitives'
 
 // Recharts is the bulk of the bundle and nothing renders it until a sync
 // finishes, so the dashboard is split out of the initial load. That keeps the
@@ -160,9 +161,9 @@ export default function App() {
     return (
       <Suspense
         fallback={
-          <p className="mt-24 text-center text-sm text-muted">
-            Building your charts…
-          </p>
+          <div className="mt-24 flex justify-center">
+            <Spinner label="Building your charts…" />
+          </div>
         }
       >
         <Dashboard
@@ -211,7 +212,17 @@ export default function App() {
                 disabled={!input.trim() || submitting}
                 className="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {submitting ? 'Starting…' : 'Start'}
+                {submitting ? (
+                  <span className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="size-3.5 animate-spin rounded-full border-2 border-ink/30 border-t-ink"
+                    />
+                    Starting…
+                  </span>
+                ) : (
+                  'Start'
+                )}
               </button>
             </form>
 
@@ -355,7 +366,9 @@ export default function App() {
         )}
 
         {view.kind === 'loading' && (
-          <p className="text-center text-sm text-muted">Building your charts…</p>
+          <div className="flex justify-center">
+            <Spinner label="Building your charts…" />
+          </div>
         )}
       </div>
     </main>
