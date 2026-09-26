@@ -50,15 +50,20 @@ services:
         value: "8081"
       - key: MEMENTO_DB_MAX_CONNS
         value: "4"
-      # Uncached profile pages stay slow; edge-cached film pages tolerate more.
-      # Deliberately conservative here: a shared host IP has reputation we do not
-      # control, and a blocked scrape only clears with time.
+      # Paginated profile pages are the most aggressively gated URLs on the site,
+      # and a shared host IP arrives with reputation we do not control. Measured
+      # from this deploy: 2 concurrent at 2s still got blocked on grid page 3, so
+      # the index phase runs strictly serially with a long gap. A large profile
+      # then takes minutes to index, which is the right trade -- a slow scrape
+      # beats a failed one, and the shared film cache means it happens once.
       - key: MEMENTO_INDEX_CONCURRENCY
-        value: "2"
+        value: "1"
       - key: MEMENTO_INDEX_INTERVAL_MS
-        value: "2000"
+        value: "6000"
+      # Film pages are edge-cached and far more forgiving, but cache misses reach
+      # the origin, so this stays modest too.
       - key: MEMENTO_DETAIL_CONCURRENCY
-        value: "6"
+        value: "3"
       - key: MEMENTO_DETAIL_INTERVAL_MS
-        value: "300"
+        value: "800"
       - fromGroup: memento-db

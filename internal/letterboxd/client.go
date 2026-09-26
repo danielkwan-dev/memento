@@ -52,12 +52,10 @@ type Config struct {
 	// between) force a profile rotation. Requiring a *streak* stops us flapping
 	// between profiles that both work fine when a block is just noise.
 	//
-	// Measured behaviour: most blocks are transient rate limiting, not
-	// fingerprint rejection -- the same URL succeeds minutes later on the same
-	// profile. Rotating eagerly is actively harmful, because it retries a hot
-	// path under a fresh TLS identity, which looks more evasive rather than
-	// less. So this is set high: only a sustained streak, which is the real
-	// signature of a dead fingerprint, triggers a switch.
+	// Each individual retry already walks to a different profile, so this governs
+	// only the starting point for NEW requests. The reference implementation
+	// promotes after 5 consecutive blocks; matching that means a fingerprint that
+	// has genuinely gone stale stops being tried first.
 	BlockStreakToSwitch int
 }
 
@@ -70,7 +68,7 @@ func DefaultConfig() Config {
 		BlockedBackoff:      8 * time.Second,
 		MaxBackoff:          60 * time.Second,
 		RequestTimeout:      30 * time.Second,
-		BlockStreakToSwitch: 12,
+		BlockStreakToSwitch: 5,
 	}
 }
 
@@ -148,6 +146,13 @@ func (c *Client) current() (string, tls_client.HttpClient) {
 	return bp.name, c.clients[bp.name]
 }
 
+// preferredIdx is the profile a fresh request starts from.
+func (c *Client) preferredIdx() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.profileIdx
+}
+
 // noteResult drives profile rotation. Only a streak of blocks with no
 // intervening success switches the default profile.
 func (c *Client) noteResult(blocked bool) (switched bool, newProfile string) {
@@ -177,7 +182,11 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			return nil, err
 		}
 
-		body, err := c.attempt(ctx, url)
+		// Try the preferred profile first, then the others in turn. The reference
+		// implementation does the same, and it matters: retrying a blocked request
+		// under the SAME fingerprint mostly just burns the retry budget, while a
+		// different one often succeeds immediately.
+		body, err := c.attempt(ctx, url, c.preferredIdx()+attempt)
 		if err == nil {
 			c.noteResult(false)
 			return body, nil
@@ -237,8 +246,12 @@ func backoff(base time.Duration, attempt int, max time.Duration) time.Duration {
 	return time.Duration(jittered)
 }
 
-func (c *Client) attempt(ctx context.Context, url string) ([]byte, error) {
-	profileName, hc := c.current()
+func (c *Client) attempt(ctx context.Context, url string, idx int) ([]byte, error) {
+	bp := browserProfiles[idx%len(browserProfiles)]
+	profileName := bp.name
+	c.mu.Lock()
+	hc := c.clients[profileName]
+	c.mu.Unlock()
 
 	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, url, nil)
 	if err != nil {
@@ -311,26 +324,58 @@ func looksLikeChallenge(body []byte) bool {
 	return false
 }
 
+// setBrowserHeaders writes a header set consistent with the impersonated browser.
+//
+// Consistency is the point, not completeness: a Chrome TLS fingerprint arriving
+// with Firefox-shaped headers (or Chromium client hints arriving over a Firefox
+// handshake) is exactly the mismatch bot detection looks for. curl_cffi sidesteps
+// this by generating headers itself; tls-client does not, so each family gets its
+// own set here.
 func setBrowserHeaders(req *fhttp.Request, profileName string) {
 	ua := userAgents[profileName]
 	if ua == "" {
-		ua = userAgents["chrome_133"]
+		ua = userAgents["chrome_152"]
 	}
 	req.Header.Set("user-agent", ua)
-	req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-	req.Header.Set("accept-language", "en-US,en;q=0.9")
-	req.Header.Set("accept-encoding", "gzip, deflate, br")
-	req.Header.Set("upgrade-insecure-requests", "1")
-	req.Header.Set("sec-fetch-dest", "document")
-	req.Header.Set("sec-fetch-mode", "navigate")
-	req.Header.Set("sec-fetch-site", "none")
-	req.Header.Set("sec-fetch-user", "?1")
-	// Client hints are Chromium-only; sending them with a Firefox or Safari
-	// fingerprint would be a giveaway.
-	if v, ok := chromeVersionHints[profileName]; ok {
-		req.Header.Set("sec-ch-ua", chromeUAHint(v))
-		req.Header.Set("sec-ch-ua-mobile", "?0")
-		req.Header.Set("sec-ch-ua-platform", platformHint)
+
+	switch {
+	case strings.HasPrefix(profileName, "firefox"):
+		// Firefox sends a distinctive accept string and no client hints.
+		req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("accept-language", "en-US,en;q=0.5")
+		req.Header.Set("accept-encoding", "gzip, deflate, br, zstd")
+		req.Header.Set("upgrade-insecure-requests", "1")
+		req.Header.Set("sec-fetch-dest", "document")
+		req.Header.Set("sec-fetch-mode", "navigate")
+		req.Header.Set("sec-fetch-site", "none")
+		req.Header.Set("sec-fetch-user", "?1")
+		req.Header.Set("priority", "u=0, i")
+
+	case strings.HasPrefix(profileName, "safari"):
+		// Safari sends neither client hints nor sec-fetch-user, and its accept
+		// header differs again.
+		req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("accept-language", "en-US,en;q=0.9")
+		req.Header.Set("accept-encoding", "gzip, deflate, br")
+		req.Header.Set("sec-fetch-dest", "document")
+		req.Header.Set("sec-fetch-mode", "navigate")
+		req.Header.Set("sec-fetch-site", "none")
+
+	default: // chromium
+		req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		req.Header.Set("accept-language", "en-US,en;q=0.9")
+		req.Header.Set("accept-encoding", "gzip, deflate, br, zstd")
+		req.Header.Set("upgrade-insecure-requests", "1")
+		req.Header.Set("sec-fetch-dest", "document")
+		req.Header.Set("sec-fetch-mode", "navigate")
+		req.Header.Set("sec-fetch-site", "none")
+		req.Header.Set("sec-fetch-user", "?1")
+		req.Header.Set("priority", "u=0, i")
+		if v, ok := chromeVersionHints[profileName]; ok {
+			req.Header.Set("sec-ch-ua", chromeUAHint(v))
+			req.Header.Set("sec-ch-ua-mobile", "?0")
+			req.Header.Set("sec-ch-ua-platform", platformHint)
+		}
 	}
 }
 

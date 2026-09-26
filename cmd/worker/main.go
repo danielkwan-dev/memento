@@ -28,12 +28,17 @@ const (
 	// idlePoll is the fallback when no NOTIFY arrives. LISTEN handles the normal
 	// case; this covers a notification sent while the worker was still booting.
 	idlePoll = 5 * time.Second
-	// jobTimeout bounds one scrape. A 2000-film cold cache is slow but not
-	// unbounded, and a stuck job must not hold the queue forever.
-	jobTimeout = 25 * time.Minute
-	// staleAfter is how long a running job may go without a progress update
-	// before it is presumed dead and requeued.
-	staleAfter  = 5 * time.Minute
+	// jobTimeout bounds one scrape. Deliberately generous: upstream rate limiting
+	// forces conservative pacing, so a cold-cache scrape of a large profile is
+	// legitimately slow -- minutes to index, then ~1s per uncached film. A stuck
+	// job still must not hold the queue forever, hence a bound at all.
+	jobTimeout = 60 * time.Minute
+	// staleAfter is how long a running job may go without a progress update before
+	// it is presumed dead and requeued. The index phase is paced serially and can
+	// legitimately go quiet for minutes on a large profile, so this sits well
+	// above that -- requeueing a healthy job would double the upstream load and
+	// make the rate limiting worse.
+	staleAfter  = 15 * time.Minute
 	maxAttempts = 3
 )
 
