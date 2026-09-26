@@ -75,6 +75,7 @@ A few things worth knowing if you run this yourself:
 - Rate limits are per-IP and cumulative, so a long scrape can earn a temporary block that clears on its own
 - Uploading your export is more reliable than scraping for large accounts, since it skips the paginated profile pages
 - The free hosting tier sleeps when idle, so the first run after a quiet spell waits a few seconds to wake up (the UI shows this as a real 'waking' phase rather than an unexplained pause)
+- The database connection must be **direct, not pooled**: progress streaming uses `LISTEN/NOTIFY`, and PgBouncer in transaction mode (what most managed poolers run) silently drops it
 
 Running the tests:
 ```bash

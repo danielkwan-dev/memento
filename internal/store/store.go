@@ -5,12 +5,25 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// envInt keeps store.Open self-contained; the config package depends on nothing
+// here, and this is the only knob the store itself needs.
+func envInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
@@ -24,10 +37,16 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
-	// Free-tier Postgres allows few connections, and this app runs two
-	// processes (api + worker) against one database.
-	cfg.MaxConns = 8
-	cfg.MinConns = 1
+	// Free-tier Postgres allows few connections, and this app runs two processes
+	// (api + worker) against one database. Each live SSE stream also holds a
+	// dedicated connection for LISTEN, so the ceiling is reached faster than the
+	// query load suggests.
+	//
+	// The connection must be DIRECT, not pooled: PgBouncer in transaction mode
+	// (what Neon and most managed poolers run) does not support LISTEN/NOTIFY,
+	// and the SSE progress stream would silently never fire.
+	cfg.MaxConns = int32(envInt("MEMENTO_DB_MAX_CONNS", 5))
+	cfg.MinConns = 0
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	cfg.MaxConnLifetime = time.Hour
 

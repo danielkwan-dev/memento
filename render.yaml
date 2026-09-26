@@ -5,7 +5,9 @@
 # services read MEMENTO_DATABASE_URL from a shared environment group.
 #
 # Setup:
-#   1. Create a Neon project (neon.tech) and copy its pooled connection string.
+#   1. Create a Neon project (neon.tech) and copy its DIRECT connection string --
+#      NOT the -pooler one. PgBouncer in transaction mode does not support
+#      LISTEN/NOTIFY, which the SSE progress stream depends on.
 #   2. In Render: New > Blueprint, point it at this repo.
 #   3. Create an env group named "memento-db" with MEMENTO_DATABASE_URL set to
 #      that connection string.
@@ -24,6 +26,10 @@ services:
     envVars:
       - key: MEMENTO_PORT
         value: "8080"
+      # Each SSE stream holds a connection for LISTEN, so keep the pool small
+      # against a free-tier database.
+      - key: MEMENTO_DB_MAX_CONNS
+        value: "5"
       # Points at the worker so enqueueing a job wakes it. On the free tier an
       # idle service is stopped, and an HTTP request is what starts it -- without
       # this a job would sit queued until the worker's own poll timer fired.
@@ -45,6 +51,8 @@ services:
     envVars:
       - key: MEMENTO_WORKER_PORT
         value: "8081"
+      - key: MEMENTO_DB_MAX_CONNS
+        value: "4"
       # Uncached profile pages stay slow; edge-cached film pages tolerate more.
       # Deliberately conservative here: a shared host IP has reputation we do not
       # control, and a blocked scrape only clears with time.
