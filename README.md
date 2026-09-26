@@ -1,6 +1,9 @@
 # 🍿 Memento
 
 Visualize your Letterboxd profile data with interactive charts and insights!
+
+**[Try it live](https://memento-0fke.onrender.com)** — the server sleeps when idle, so the first load takes a moment to wake up.
+
 <img width="602" height="700" alt="image" src="https://github.com/user-attachments/assets/236ae752-8cb5-4b7d-b2dc-dd3478f8ca45" />
 <img width="593" height="699" alt="image" src="https://github.com/user-attachments/assets/5848e275-a4bc-4f38-b4d7-3cb03482e6a4" />
 <img width="581" height="638" alt="image" src="https://github.com/user-attachments/assets/d3a58bd9-716b-4f56-882f-88ae7e91dee1" />
@@ -14,18 +17,24 @@ Visualize your Letterboxd profile data with interactive charts and insights!
 
 | Category | Visualizations |
 |----------|----------------|
-| **Likes & Ratings** | Histogram • Stat tiles |
-| **Diary Activity** | Calendar heatmap • Line chart • Weekday bars |
-| **Genres & Themes** | Bar charts |
+| **Likes & Ratings** | Histogram • Donut chart • Scatter plot • Stat tiles |
+| **Diary Activity** | Calendar heatmap • Line charts • Weekday bars |
+| **Genres & Themes** | Bar charts • Radar charts |
 | **Decades** | Radar chart |
 | **Obscurity Metrics** | Histogram • Rarest films list |
 | **Runtime Analysis** | Bar chart |
-| **People & Studios** | Bar charts |
-| **Languages & Countries** | Bar charts |
+| **People & Studios** | Bar charts • Radar chart |
+| **Languages & Countries** | Bar charts • Radar charts |
 
 ## Installation & Usage
 
-### Option 1: Run with Docker
+### Option 1: Use the Live Web App
+Visit [memento-0fke.onrender.com](https://memento-0fke.onrender.com)
+
+Scraping by username is rate limited on hosted servers, so uploading your data
+export is the more reliable route there. Running locally avoids this entirely.
+
+### Option 2: Run with Docker
 1. Clone the repository:
    ```bash
    git clone https://github.com/danielkwan-dev/memento.git
@@ -37,7 +46,7 @@ Visualize your Letterboxd profile data with interactive charts and insights!
    ```
 3. Visit [localhost:8080](http://localhost:8080)
 
-### Option 2: Run Locally
+### Option 3: Run Locally
 1. Start Postgres:
    ```bash
    docker compose up -d postgres
