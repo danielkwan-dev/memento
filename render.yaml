@@ -1,0 +1,59 @@
+# Render blueprint: the web service and the worker, both on the free tier.
+#
+# Postgres is NOT defined here on purpose. Render's free Postgres expires after
+# 30 days; Neon's free tier does not, so the database lives there and both
+# services read MEMENTO_DATABASE_URL from a shared environment group.
+#
+# Setup:
+#   1. Create a Neon project (neon.tech) and copy its pooled connection string.
+#   2. In Render: New > Blueprint, point it at this repo.
+#   3. Create an env group named "memento-db" with MEMENTO_DATABASE_URL set to
+#      that connection string.
+services:
+  # Serves the React app and the API from one image, so there is one origin and
+  # no CORS to configure.
+  - type: web
+    name: memento
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # The api stage of the multi-stage build.
+    dockerTarget: api
+    healthCheckPath: /healthz
+    envVars:
+      - key: MEMENTO_PORT
+        value: "8080"
+      # Points at the worker so enqueueing a job wakes it. On the free tier an
+      # idle service is stopped, and an HTTP request is what starts it -- without
+      # this a job would sit queued until the worker's own poll timer fired.
+      - key: MEMENTO_WORKER_HEALTH_URL
+        value: https://memento-worker.onrender.com/healthz
+      - fromGroup: memento-db
+
+  # The worker runs as a web service rather than a background worker because
+  # Render's background workers are a paid feature, and because the health
+  # endpoint is what makes it wakeable.
+  - type: web
+    name: memento-worker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerTarget: worker
+    healthCheckPath: /healthz
+    envVars:
+      - key: MEMENTO_WORKER_PORT
+        value: "8081"
+      # Uncached profile pages stay slow; edge-cached film pages tolerate more.
+      # Deliberately conservative here: a shared host IP has reputation we do not
+      # control, and a blocked scrape only clears with time.
+      - key: MEMENTO_INDEX_CONCURRENCY
+        value: "2"
+      - key: MEMENTO_INDEX_INTERVAL_MS
+        value: "2000"
+      - key: MEMENTO_DETAIL_CONCURRENCY
+        value: "6"
+      - key: MEMENTO_DETAIL_INTERVAL_MS
+        value: "300"
+      - fromGroup: memento-db

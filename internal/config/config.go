@@ -40,9 +40,11 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		DatabaseURL:       env("MEMENTO_DATABASE_URL", "postgres://memento:memento@localhost:5432/memento?sslmode=disable"),
-		Port:              envInt("MEMENTO_PORT", 8080),
-		WorkerPort:        envInt("MEMENTO_WORKER_PORT", 8081),
+		DatabaseURL: env("MEMENTO_DATABASE_URL", "postgres://memento:memento@localhost:5432/memento?sslmode=disable"),
+		// PORT is injected by most container hosts (Render, Heroku, Railway) and
+		// the health check binds to it, so it wins over our own variable.
+		Port:              envInt("PORT", envInt("MEMENTO_PORT", 8080)),
+		WorkerPort:        envInt("PORT", envInt("MEMENTO_WORKER_PORT", 8081)),
 		WorkerHealthURL:   env("MEMENTO_WORKER_HEALTH_URL", ""),
 		CORSOrigins:       envList("MEMENTO_CORS_ORIGINS", []string{"http://localhost:5173"}),
 		IndexConcurrency:  envInt("MEMENTO_INDEX_CONCURRENCY", 3),

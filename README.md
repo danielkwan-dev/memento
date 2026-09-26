@@ -62,7 +62,7 @@ Go • Postgres • goquery
 React • TypeScript • Recharts • Tailwind
 
 **Infrastructure**:  
-Docker • GitHub Actions • Fly.io
+Docker • GitHub Actions • Render • Neon
 
 The API image also serves the built React app, so the whole web tier is one
 deploy with no CORS to configure.
@@ -74,7 +74,7 @@ A few things worth knowing if you run this yourself:
 - Letterboxd has no public API, so requests go through a client that replays real browser TLS fingerprints
 - Rate limits are per-IP and cumulative, so a long scrape can earn a temporary block that clears on its own
 - Uploading your export is more reliable than scraping for large accounts, since it skips the paginated profile pages
-- The free hosting tier sleeps when idle, so the first run after a quiet spell waits a few seconds to wake up
+- The free hosting tier sleeps when idle, so the first run after a quiet spell waits a few seconds to wake up (the UI shows this as a real 'waking' phase rather than an unexplained pause)
 
 Running the tests:
 ```bash
