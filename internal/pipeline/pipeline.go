@@ -379,13 +379,20 @@ func (p *Pipeline) fanOutPages(
 func (p *Pipeline) indexDiary(ctx context.Context, username string, sem *semaphore.Weighted, lim *rateLimiter) ([]letterboxd.DiaryEntry, error) {
 	first, err := p.getPage(ctx, sem, lim, fmt.Sprintf("%s/%s/films/diary/", letterboxd.BaseURL, username))
 	if err != nil {
-		// A missing diary is not fatal: plenty of users log films without dating
-		// them, and every non-temporal chart still works.
-		if errors.Is(err, letterboxd.ErrNotFound) {
-			p.log.Warn("no diary found", "username", username)
-			return nil, nil
+		// The diary is supplementary: it powers only the time-series charts, and
+		// plenty of users log films without ever dating them. So an unreachable
+		// diary degrades the result rather than failing the job -- whether it is
+		// absent (ErrNotFound) or merely blocked, which is the common case when
+		// upstream is rate limiting. Losing every other chart because the diary
+		// was throttled would be a poor trade.
+		//
+		// Cancellation is different: that is the caller shutting us down.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
-		return nil, fmt.Errorf("fetch diary for %q: %w", username, err)
+		p.log.Warn("diary unavailable; continuing without it",
+			"username", username, "err", err)
+		return nil, nil
 	}
 	entries, err := letterboxd.ParseDiaryPage(first)
 	if err != nil {

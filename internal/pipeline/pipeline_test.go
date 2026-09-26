@@ -39,6 +39,9 @@ type fakeFetcher struct {
 	inFlight     atomic.Int64
 	peakInFlight atomic.Int64
 	noDiary      bool
+	// blockDiary makes the diary return ErrBlocked rather than ErrNotFound, which
+	// is what upstream rate limiting actually looks like.
+	blockDiary bool
 }
 
 func newFakeFetcher() *fakeFetcher {
@@ -93,6 +96,9 @@ func (f *fakeFetcher) Get(ctx context.Context, url string) ([]byte, error) {
 		return []byte(renderFilm(slug)), nil
 
 	case strings.Contains(url, "/films/diary/"):
+		if f.blockDiary {
+			return nil, letterboxd.ErrBlocked
+		}
 		if f.noDiary {
 			return nil, letterboxd.ErrNotFound
 		}
@@ -564,4 +570,34 @@ func pageOf(url string) int {
 		}
 	}
 	return 1
+}
+
+// A BLOCKED diary must not fail the job either.
+//
+// This is what happened on the first real deploy: upstream rate limited the diary
+// page, and because only ErrNotFound was tolerated, the whole scrape failed and
+// the user got nothing -- despite the films grid having been fetched fine. The
+// diary only powers the time-series charts, so losing it should degrade the
+// result, never discard it.
+func TestRun_BlockedDiaryIsNotFatal(t *testing.T) {
+	f := newFakeFetcher()
+	f.gridPages, f.filmsPer = 1, 5
+	f.blockDiary = true
+	s := newFakeStore()
+
+	res, err := quietPipeline(f, s, testConfig()).
+		Run(context.Background(), uuid.New(), "someone")
+	if err != nil {
+		t.Fatalf("a blocked diary must not fail the run: %v", err)
+	}
+	if res.DiaryEntries != 0 {
+		t.Errorf("DiaryEntries = %d, want 0", res.DiaryEntries)
+	}
+	// Everything the grid provides must still be there.
+	if res.WatchEntries != 5 {
+		t.Errorf("WatchEntries = %d, want 5", res.WatchEntries)
+	}
+	if len(s.watchEntries) != 5 {
+		t.Errorf("persisted %d watch entries, want 5", len(s.watchEntries))
+	}
 }
