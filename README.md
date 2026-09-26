@@ -135,6 +135,27 @@ cd web && npm install && npm run dev  # :5173
 
 Configuration is environment-based; see `.env.example`.
 
+## A note on the live end-to-end test
+
+`TestLivePipeline` (opt-in, `MEMENTO_LIVE=1`) exercises the real pipeline against the
+real site with an in-memory store. During development it reliably got through the
+index phase — 242 films indexed in ~18s, pagination handled correctly — and then
+tripped the circuit breaker in hydrate:
+
+```
+upstream is failing too many requests: 17 of the first 40 films failed
+  -- Letterboxd is rate limiting this scrape; try again in a few minutes
+```
+
+That is the breaker doing its job, not a defect: the same films returned 200 to
+sequential `curl` throughout, and every TLS profile returned 200 after a cooldown.
+The cause was hours of accumulated request volume from one IP while developing the
+scraper, and a 20-minute pause was not enough to clear it.
+
+Run it from an IP that has not been hammering the site, on a small profile, and
+expect to wait — a cold cache of ~250 films is a few minutes of paced requests. The
+shared film cache means the second run is near-instant.
+
 ## Tests
 
 ```bash
