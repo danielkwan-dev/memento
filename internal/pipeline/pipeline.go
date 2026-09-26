@@ -165,7 +165,31 @@ func (p *Pipeline) Run(ctx context.Context, jobID uuid.UUID, username string) (*
 	if err := p.store.UpdateProgress(ctx, jobID, store.PhaseIndex, 0, 0, 0); err != nil {
 		return nil, err
 	}
+
+	// Heartbeat for the duration of the index phase.
+	//
+	// Index requests are paced slowly (upstream rate limits the paginated profile
+	// pages hardest), so a large profile can spend minutes here. Without a tick
+	// the jobs row goes untouched, the reaper cannot tell a slow job from a dead
+	// worker, and it requeues a perfectly healthy scrape -- which then doubles the
+	// load on the very IP that was already being throttled. Observed in
+	// production: a running job flipped back to queued/waking mid-index.
+	indexCtx, stopIndexHeartbeat := context.WithCancel(ctx)
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-indexCtx.Done():
+				return
+			case <-t.C:
+				_ = p.store.UpdateProgress(indexCtx, jobID, store.PhaseIndex, 0, 0, 0)
+			}
+		}
+	}()
+
 	watch, diary, err := p.index(ctx, username)
+	stopIndexHeartbeat()
 	if err != nil {
 		return nil, err
 	}

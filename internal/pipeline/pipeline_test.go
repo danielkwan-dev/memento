@@ -142,6 +142,7 @@ type fakeStore struct {
 	watchEntries    []letterboxd.WatchEntry
 	diaryEntries    []letterboxd.DiaryEntry
 	progress        []store.JobPhase
+	progressCalls   map[store.JobPhase]int
 	syncedUser      int64
 	stubCount       int
 }
@@ -150,6 +151,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		cachedDetails: map[string]bool{},
 		cachedStats:   map[string]bool{},
+		progressCalls: map[store.JobPhase]int{},
 	}
 }
 
@@ -217,11 +219,19 @@ func (s *fakeStore) MarkUserSynced(_ context.Context, id int64) error {
 func (s *fakeStore) UpdateProgress(_ context.Context, _ uuid.UUID, phase store.JobPhase, _, _, _ int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Collapse repeated ticks of the same phase.
+	s.progressCalls[phase]++
+	// Collapse repeated ticks of the same phase for the ordering assertions.
 	if n := len(s.progress); n == 0 || s.progress[n-1] != phase {
 		s.progress = append(s.progress, phase)
 	}
 	return nil
+}
+
+// phaseCalls reports how many progress updates a phase received.
+func (s *fakeStore) phaseCalls(phase store.JobPhase) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.progressCalls[phase]
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -599,5 +609,41 @@ func TestRun_BlockedDiaryIsNotFatal(t *testing.T) {
 	}
 	if len(s.watchEntries) != 5 {
 		t.Errorf("persisted %d watch entries, want 5", len(s.watchEntries))
+	}
+}
+
+// A slow index phase must keep touching the jobs row.
+//
+// Observed in production: the index phase reported progress exactly once, so a
+// profile that took minutes to index looked identical to a dead worker. The
+// reaper requeued the running job (status flipped back to queued/waking), which
+// then retried and doubled the load on an IP that was already being rate limited.
+func TestRun_IndexPhaseHeartbeats(t *testing.T) {
+	f := newFakeFetcher()
+	f.gridPages, f.diaryPages, f.filmsPer = 3, 1, 2
+	// Slow enough that the 20s heartbeat cannot fire, but the phase still has to
+	// report at least its initial update -- and crucially, hydrate must report
+	// repeatedly, which is what keeps a long job alive.
+	s := newFakeStore()
+
+	if _, err := quietPipeline(f, s, testConfig()).
+		Run(context.Background(), uuid.New(), "someone"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := s.phaseCalls(store.PhaseIndex); got < 1 {
+		t.Errorf("index progress calls = %d, want at least 1", got)
+	}
+	// Hydrate ticks on a timer, so a run with real work must produce several.
+	if got := s.phaseCalls(store.PhaseHydrate); got < 1 {
+		t.Errorf("hydrate progress calls = %d, want at least 1", got)
+	}
+	// Every phase must be represented, so the reaper always has a recent write.
+	for _, phase := range []store.JobPhase{
+		store.PhaseResolve, store.PhaseIndex, store.PhaseHydrate, store.PhasePersist,
+	} {
+		if s.phaseCalls(phase) == 0 {
+			t.Errorf("phase %s never reported progress", phase)
+		}
 	}
 }
