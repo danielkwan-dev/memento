@@ -160,8 +160,33 @@ func TestLooksLikeChallenge(t *testing.T) {
 	if !looksLikeChallenge(readFixture(t, "cloudflare_challenge.html")) {
 		t.Error("real challenge page was not detected")
 	}
-	// A real film page must never be mistaken for a challenge.
-	if looksLikeChallenge(readFixture(t, "film_parasite.html")) {
-		t.Error("film page misdetected as a challenge")
+
+	// No real page may be mistaken for a challenge. This is the regression that
+	// cost the most to find: Letterboxd embeds Cloudflare's Turnstile script on
+	// ordinary pages, so "challenge-platform" appears in perfectly valid HTML.
+	// Matching on it silently rejected every successful fetch of a profile whose
+	// page was small enough to fall under the size guard -- a 146KB page was
+	// refused six attempts in a row while the same request returned 200 with
+	// 146KB of real content. Larger profiles worked purely by being over the
+	// threshold, which made it look like an upstream block.
+	for _, name := range []string{
+		"film_parasite.html",
+		"film_multi_director.html",
+		"film_silent.html",
+		"films_grid_page1.html",
+		"diary_page1.html",
+	} {
+		if looksLikeChallenge(readFixture(t, name)) {
+			t.Errorf("%s was misdetected as a challenge", name)
+		}
+	}
+
+	// And the guard must not be the only defence: a small REAL page still has to
+	// pass. This mimics a sparse profile whose page contains the Turnstile script.
+	small := []byte(`<!doctype html><html><head><title>Films</title>` +
+		`<script src="/cdn-cgi/challenge-platform/h/g/scripts/jsd/main.js"></script>` +
+		`</head><body><ul class="poster-list"></ul></body></html>`)
+	if looksLikeChallenge(small) {
+		t.Error("a small real page containing the Turnstile script was misdetected")
 	}
 }

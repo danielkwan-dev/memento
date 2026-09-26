@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,8 @@ type Config struct {
 	MaxAttempts      int
 	TransientBackoff time.Duration
 	BlockedBackoff   time.Duration
+	// RateLimitBackoff applies to 429s, which need far longer than a block.
+	RateLimitBackoff time.Duration
 	MaxBackoff       time.Duration
 	RequestTimeout   time.Duration
 	// BlockStreakToSwitch is how many consecutive blocks (with no success in
@@ -65,8 +68,10 @@ func DefaultConfig() Config {
 		TransientBackoff: 1500 * time.Millisecond,
 		// Blocks are usually rate limiting that clears on its own, so start the
 		// backoff high and let it grow: waiting is what actually recovers.
-		BlockedBackoff:      8 * time.Second,
-		MaxBackoff:          60 * time.Second,
+		BlockedBackoff: 8 * time.Second,
+		// A 429 outlasts a short ladder; starting high beats three wasted tries.
+		RateLimitBackoff:    20 * time.Second,
+		MaxBackoff:          90 * time.Second,
 		RequestTimeout:      30 * time.Second,
 		BlockStreakToSwitch: 5,
 	}
@@ -155,6 +160,13 @@ func (c *Client) preferredIdx() int {
 
 // noteResult drives profile rotation. Only a streak of blocks with no
 // intervening success switches the default profile.
+//
+// It also discards the cookie jars on rotation, which matters more than the
+// rotation itself: a failed Cloudflare challenge leaves a cookie marking the
+// session as suspect, and a long-lived client keeps presenting it on every
+// subsequent request. Observed locally -- a freshly built client fetched a profile
+// fine while the worker's 10-minute-old client was blocked on the same URL, six
+// attempts in a row. Without this the client never recovers.
 func (c *Client) noteResult(blocked bool) (switched bool, newProfile string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -168,7 +180,25 @@ func (c *Client) noteResult(blocked bool) (switched bool, newProfile string) {
 	}
 	c.blockStreak = 0
 	c.profileIdx = (c.profileIdx + 1) % len(browserProfiles)
+	c.resetSessionsLocked()
 	return true, browserProfiles[c.profileIdx].name
+}
+
+// resetSessionsLocked rebuilds every underlying client, dropping cookies and open
+// connections. The caller must hold c.mu.
+func (c *Client) resetSessionsLocked() {
+	for _, bp := range browserProfiles {
+		hc, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(),
+			tls_client.WithClientProfile(bp.profile),
+			tls_client.WithTimeoutSeconds(int(c.cfg.RequestTimeout.Seconds())),
+			tls_client.WithCookieJar(tls_client.NewCookieJar()),
+		)
+		if err != nil {
+			// Keep the existing client rather than leaving a nil in the map.
+			continue
+		}
+		c.clients[bp.name] = hc
+	}
 }
 
 // Get fetches url, retrying transient failures and Cloudflare blocks with
@@ -198,6 +228,9 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			return nil, err
 		}
 
+		// A 429 is about volume: every profile gets one, so rotating is pointless
+		// and the only useful response is to wait longer.
+		limited := errors.Is(err, ErrRateLimited)
 		blocked := errors.Is(err, ErrBlocked)
 		if blocked {
 			c.stats.add(0, 0, 1, 0)
@@ -206,7 +239,7 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 				c.log.Warn("rotating browser profile after block streak",
 					"new_profile", name, "url", url)
 			}
-		} else {
+		} else if !limited {
 			c.noteResult(false)
 		}
 
@@ -216,10 +249,18 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 		}
 
 		base := c.cfg.TransientBackoff
-		if blocked {
+		switch {
+		case limited:
+			base = c.cfg.RateLimitBackoff
+		case blocked:
 			base = c.cfg.BlockedBackoff
 		}
 		wait := backoff(base, attempt, c.cfg.MaxBackoff)
+		// The server's own Retry-After beats our guess.
+		var rle *rateLimitError
+		if errors.As(err, &rle) && rle.retryAfter > wait {
+			wait = rle.retryAfter
+		}
 		c.stats.add(0, 1, 0, 0)
 		c.log.Debug("retrying", "url", url, "attempt", attempt+1,
 			"wait", wait, "blocked", blocked, "err", err)
@@ -286,9 +327,14 @@ func (c *Client) attempt(ctx context.Context, url string, idx int) ([]byte, erro
 	case resp.StatusCode == fhttp.StatusNotFound:
 		return nil, ErrNotFound
 
+	case resp.StatusCode == fhttp.StatusTooManyRequests:
+		// A 429 is about volume, not identity. Honour Retry-After when present:
+		// guessing shorter than the server asked for just earns another 429.
+		wait := parseRetryAfter(resp.Header.Get("retry-after"))
+		return nil, &rateLimitError{retryAfter: wait}
+
 	case resp.StatusCode == fhttp.StatusForbidden,
-		resp.StatusCode == fhttp.StatusServiceUnavailable,
-		resp.StatusCode == fhttp.StatusTooManyRequests:
+		resp.StatusCode == fhttp.StatusServiceUnavailable:
 		return nil, fmt.Errorf("%w: status %d", ErrBlocked, resp.StatusCode)
 
 	case resp.StatusCode >= 500:
@@ -299,20 +345,63 @@ func (c *Client) attempt(ctx context.Context, url string, idx int) ([]byte, erro
 	}
 }
 
-// challengeMarkers appear in Cloudflare interstitials served with a 200.
-var challengeMarkers = []string{
-	"just a moment",
-	"cf-browser-verification",
-	"cf_chl_opt",
-	"challenge-platform",
-	"attention required! | cloudflare",
-	"enable javascript and cookies to continue",
+// rateLimitError carries the server's requested wait, so the retry loop can
+// honour it instead of guessing.
+type rateLimitError struct {
+	retryAfter time.Duration
 }
 
+func (e *rateLimitError) Error() string {
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("%v (retry after %v)", ErrRateLimited, e.retryAfter)
+	}
+	return ErrRateLimited.Error()
+}
+
+func (e *rateLimitError) Unwrap() error { return ErrRateLimited }
+
+// parseRetryAfter reads the header's delta-seconds form. Cloudflare also permits
+// an HTTP date, which is rarer here and not worth the parsing.
+func parseRetryAfter(v string) time.Duration {
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	// Cap it: a server asking for an hour should not wedge a job that long.
+	if n > 120 {
+		n = 120
+	}
+	return time.Duration(n) * time.Second
+}
+
+// challengeMarkers appear in Cloudflare interstitials served with a 200.
+//
+// These must be strings a REAL page never contains, which is narrower than it
+// sounds: Letterboxd embeds Cloudflare's Turnstile script on ordinary pages, so
+// "challenge-platform" appears in perfectly good HTML. Matching on it rejected
+// every successful fetch of a profile whose page happened to be small enough to
+// get scanned -- a 146KB page was refused six times in a row while the identical
+// request returned 200 with full content. Only the interstitial's own title and
+// body text are safe to match.
+var challengeMarkers = []string{
+	"<title>just a moment",
+	"cf-browser-verification",
+	"attention required! | cloudflare",
+	"enable javascript and cookies to continue",
+	"sorry, you have been blocked",
+}
+
+// maxChallengeBodySize bounds the scan. A Cloudflare interstitial is a few KB;
+// anything larger is a real page. This is a cheap guard, NOT the safety net --
+// the markers themselves have to be unambiguous, because a real page can easily
+// come in under any size threshold.
+const maxChallengeBodySize = 64 * 1024
+
 func looksLikeChallenge(body []byte) bool {
-	// Interstitials are small; real pages are hundreds of KB. Checking only
-	// small bodies keeps this cheap on the happy path.
-	if len(body) > 200*1024 {
+	if len(body) > maxChallengeBodySize {
 		return false
 	}
 	lower := strings.ToLower(string(body))
@@ -324,13 +413,6 @@ func looksLikeChallenge(body []byte) bool {
 	return false
 }
 
-// setBrowserHeaders writes a header set consistent with the impersonated browser.
-//
-// Consistency is the point, not completeness: a Chrome TLS fingerprint arriving
-// with Firefox-shaped headers (or Chromium client hints arriving over a Firefox
-// handshake) is exactly the mismatch bot detection looks for. curl_cffi sidesteps
-// this by generating headers itself; tls-client does not, so each family gets its
-// own set here.
 func setBrowserHeaders(req *fhttp.Request, profileName string) {
 	ua := userAgents[profileName]
 	if ua == "" {

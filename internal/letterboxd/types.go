@@ -13,6 +13,11 @@ var (
 	// ErrBlocked means Cloudflare rejected us (403/503 + challenge markers).
 	// Retried with a longer backoff, and may rotate the browser profile.
 	ErrBlocked = errors.New("letterboxd: blocked by bot protection")
+	// ErrRateLimited is a 429: the request was understood and refused for volume,
+	// not identity. Measured: once a 429 starts, EVERY TLS profile gets one, so
+	// rotating fingerprints is useless and only burns the retry budget. The remedy
+	// is waiting -- ideally for as long as Retry-After says.
+	ErrRateLimited = errors.New("letterboxd: rate limited")
 	// ErrPrivate means the profile exists but its data is not public.
 	ErrPrivate = errors.New("letterboxd: profile is private")
 	// ErrTransient covers 5xx, timeouts and connection resets.
