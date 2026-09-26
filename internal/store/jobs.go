@@ -73,6 +73,13 @@ func (j *Job) Terminal() bool {
 const jobColumns = `id, username, kind, status, phase, films_total, films_done,
 	cache_hits, COALESCE(error, ''), attempts, created_at, started_at, finished_at`
 
+// jobColumnsQualified is jobColumns with every column prefixed by the "j" alias.
+// UPDATE ... FROM brings the CTE's columns into scope, so an unqualified "id" in
+// RETURNING is ambiguous between the target table and the CTE.
+const jobColumnsQualified = `j.id, j.username, j.kind, j.status, j.phase,
+	j.films_total, j.films_done, j.cache_hits, COALESCE(j.error, ''), j.attempts,
+	j.created_at, j.started_at, j.finished_at`
+
 func scanJob(row pgx.Row) (*Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.Username, &j.Kind, &j.Status, &j.Phase,
@@ -214,7 +221,7 @@ func (s *Store) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
 		    started_at = COALESCE(j.started_at, now())
 		FROM claimed
 		WHERE j.id = claimed.id
-		RETURNING `+jobColumns, workerID)
+		RETURNING `+jobColumnsQualified, workerID)
 
 	j, err := scanJob(row)
 	if err != nil {
