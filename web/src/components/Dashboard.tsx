@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { api } from '../lib/api'
 import type { Stats } from '../lib/api'
 import {
   Card,
@@ -37,7 +38,29 @@ export function Dashboard({
   onReset: () => void
 }) {
   const [tab, setTab] = useState<Tab>('overview')
+  const [deleting, setDeleting] = useState(false)
   const o = stats.overview
+
+  // The backend removes this user's entries and cached stats while leaving the
+  // global film cache alone -- that table holds only public facts about films.
+  const handleDelete = async () => {
+    if (deleting) return
+    if (
+      !window.confirm(
+        `Delete stored data for ${username}? Your ratings and diary entries are removed. ` +
+          `Cached film details stay, since they are public facts about films, not about you.`,
+      )
+    ) {
+      return
+    }
+    setDeleting(true)
+    try {
+      await api.deleteUser(username)
+      onReset()
+    } catch {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pb-16">
@@ -53,12 +76,21 @@ export function Dashboard({
               ` · ${o.diary_entries.toLocaleString()} diary entries`}
           </p>
         </div>
-        <button
-          onClick={onReset}
-          className="rounded-lg border border-border px-3.5 py-2 text-sm text-muted transition-colors hover:border-muted hover:text-text"
-        >
-          Analyse someone else
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="rounded-lg border border-border px-3.5 py-2 text-sm text-muted transition-colors hover:border-accent-3 hover:text-accent-3 disabled:opacity-50"
+          >
+            {deleting ? 'Deleting…' : 'Delete my data'}
+          </button>
+          <button
+            onClick={onReset}
+            className="rounded-lg border border-border px-3.5 py-2 text-sm text-muted transition-colors hover:border-muted hover:text-text"
+          >
+            Analyse someone else
+          </button>
+        </div>
       </header>
 
       {/* Filters/navigation in one row above the charts. */}
