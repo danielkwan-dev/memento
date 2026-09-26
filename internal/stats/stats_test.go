@@ -295,11 +295,7 @@ func TestObscurity(t *testing.T) {
 		t.Errorf("deciles total = %d, want 3 films", total)
 	}
 
-	type rare struct {
-		Title      string `json:"title"`
-		WatchCount int64  `json:"watch_count"`
-	}
-	rarest, ok := out["rarest"].([]rare)
+	rarest, ok := out["rarest"].([]RareFilm)
 	if !ok {
 		t.Fatalf("rarest has unexpected type %T", out["rarest"])
 	}

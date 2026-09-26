@@ -69,6 +69,12 @@ type DayCount struct {
 	Count int    `json:"count"`
 }
 
+// RareFilm is one of the user's least-watched films, for the obscurity list.
+type RareFilm struct {
+	Title      string `json:"title"`
+	WatchCount int64  `json:"watch_count"`
+}
+
 type Overview struct {
 	FilmsLogged   int      `json:"films_logged"`
 	DiaryEntries  int      `json:"diary_entries"`
@@ -218,7 +224,7 @@ func (s *Service) dayCounts(ctx context.Context, userID int64, query string) ([]
 func (s *Service) association(ctx context.Context, userID int64, table, column string, limit int) ([]Bucket, error) {
 	query := fmt.Sprintf(`
 		SELECT a.%[2]s, count(*)::int,
-		       avg(w.rating)::float8 FILTER (WHERE w.rating IS NOT NULL)
+		       avg(w.rating) FILTER (WHERE w.rating IS NOT NULL)::float8
 		FROM watch_entries w
 		JOIN %[1]s a ON a.film_slug = w.film_slug
 		WHERE w.user_id = $1
@@ -248,7 +254,7 @@ func (s *Service) buckets(ctx context.Context, query string, args ...any) ([]Buc
 func (s *Service) decades(ctx context.Context, userID int64) ([]Bucket, error) {
 	return s.buckets(ctx, `
 		SELECT ((f.year / 10) * 10)::text || 's', count(*)::int,
-		       avg(w.rating)::float8 FILTER (WHERE w.rating IS NOT NULL)
+		       avg(w.rating) FILTER (WHERE w.rating IS NOT NULL)::float8
 		FROM watch_entries w
 		JOIN films f ON f.slug = w.film_slug
 		WHERE w.user_id = $1 AND f.year IS NOT NULL
@@ -310,13 +316,9 @@ func (s *Service) obscurity(ctx context.Context, userID int64) (map[string]any, 
 	}
 	defer rarest.Close()
 
-	type rare struct {
-		Title      string `json:"title"`
-		WatchCount int64  `json:"watch_count"`
-	}
-	var rares []rare
+	var rares []RareFilm
 	for rarest.Next() {
-		var r rare
+		var r RareFilm
 		if err := rarest.Scan(&r.Title, &r.WatchCount); err != nil {
 			return nil, err
 		}
@@ -334,7 +336,7 @@ func (s *Service) runtime(ctx context.Context, userID int64) ([]Bucket, error) {
 		         ELSE ((f.runtime_min / 30) * 30)::text || '-' || ((f.runtime_min / 30) * 30 + 29)::text
 		       END,
 		       count(*)::int,
-		       avg(w.rating)::float8 FILTER (WHERE w.rating IS NOT NULL)
+		       avg(w.rating) FILTER (WHERE w.rating IS NOT NULL)::float8
 		FROM watch_entries w
 		JOIN films f ON f.slug = w.film_slug
 		WHERE w.user_id = $1 AND f.runtime_min IS NOT NULL AND f.runtime_min > 0
@@ -346,7 +348,7 @@ func (s *Service) people(ctx context.Context, userID int64) (map[string]any, err
 	byRole := func(role string, limit int) ([]Bucket, error) {
 		return s.buckets(ctx, `
 			SELECT p.name, count(*)::int,
-			       avg(w.rating)::float8 FILTER (WHERE w.rating IS NOT NULL)
+			       avg(w.rating) FILTER (WHERE w.rating IS NOT NULL)::float8
 			FROM watch_entries w
 			JOIN film_people p ON p.film_slug = w.film_slug
 			WHERE w.user_id = $1 AND p.role = $2::person_role
