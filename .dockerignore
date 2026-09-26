@@ -11,7 +11,7 @@ internal/letterboxd/testdata/
 *.md
 .env
 .env.local
-Dockerfile
+Dockerfile*
 .dockerignore
 docker-compose.yml
 fly.*.toml

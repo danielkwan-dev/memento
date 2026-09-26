@@ -18,10 +18,8 @@ services:
     name: memento
     runtime: docker
     plan: free
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.api
     dockerContext: .
-    # The api stage of the multi-stage build.
-    dockerTarget: api
     healthCheckPath: /healthz
     envVars:
       - key: MEMENTO_PORT
@@ -44,9 +42,8 @@ services:
     name: memento-worker
     runtime: docker
     plan: free
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.worker
     dockerContext: .
-    dockerTarget: worker
     healthCheckPath: /healthz
     envVars:
       - key: MEMENTO_WORKER_PORT

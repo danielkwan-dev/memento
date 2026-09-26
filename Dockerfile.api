@@ -1,0 +1,36 @@
+# Web service: serves the built React app and the API from one binary, so there
+# is one deploy, one origin and no CORS to configure.
+#
+# A separate file per service rather than one multi-stage Dockerfile with targets,
+# because Render cannot select a build stage (no dockerTarget field).
+
+# --- frontend ---
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+# --- go ---
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+# The embedfrontend tag activates cmd/api/embed.go, which needs this directory.
+COPY --from=web /web/dist ./cmd/api/dist
+
+ENV CGO_ENABLED=0 GOOS=linux
+RUN go build -tags embedfrontend -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
+
+# --- runtime ---
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 10001 app
+COPY --from=build /out/api /usr/local/bin/api
+USER app
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/api"]

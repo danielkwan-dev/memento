@@ -16,7 +16,7 @@ services:
   api:
     build:
       context: .
-      target: api
+      dockerfile: Dockerfile.api
     environment:
       MEMENTO_DATABASE_URL: postgres://memento:memento@postgres:5432/memento?sslmode=disable
       MEMENTO_PORT: "8080"
@@ -29,7 +29,7 @@ services:
   worker:
     build:
       context: .
-      target: worker
+      dockerfile: Dockerfile.worker
     environment:
       MEMENTO_DATABASE_URL: postgres://memento:memento@postgres:5432/memento?sslmode=disable
       MEMENTO_WORKER_PORT: "8081"

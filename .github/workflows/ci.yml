@@ -85,7 +85,7 @@ jobs:
 
       # Building both targets catches a broken Dockerfile before a deploy does.
       - name: Build api image
-        run: docker build --target api -t memento-api .
+        run: docker build -f Dockerfile.api -t memento-api .
 
       - name: Build worker image
-        run: docker build --target worker -t memento-worker .
+        run: docker build -f Dockerfile.worker -t memento-worker .
