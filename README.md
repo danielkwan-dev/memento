@@ -74,6 +74,7 @@ A few things worth knowing if you run this yourself:
 - Letterboxd has no public API, so requests go through a client that replays real browser TLS fingerprints
 - Rate limits are per-IP and cumulative, so a long scrape can earn a temporary block that clears on its own
 - Uploading your export is more reliable than scraping for large accounts, since it skips the paginated profile pages
+- **Running it locally works best.** Letterboxd treats a home connection far more leniently than a datacenter one, so the hosted demo gets rate limited where a local run does not — `docker compose up` and everything works
 - The free hosting tier sleeps when idle, so the first run after a quiet spell waits a few seconds to wake up (the UI shows this as a real 'waking' phase rather than an unexplained pause)
 - The database connection must be **direct, not pooled**: progress streaming uses `LISTEN/NOTIFY`, and PgBouncer in transaction mode (what most managed poolers run) silently drops it
 

@@ -237,17 +237,43 @@ export default function App() {
                       running locally. Upload your data export below instead — it
                       skips the pages that get blocked.
                     </p>
+                    <p className="mt-2 text-muted">
+                      If the upload struggles too, running it locally avoids this
+                      entirely.{' '}
+                      <a
+                        href="https://github.com/danielkwan-dev/memento#installation--usage"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-accent underline decoration-accent/40 hover:decoration-accent"
+                      >
+                        Setup instructions
+                      </a>
+                      .
+                    </p>
                   </>
                 ) : view.via === 'upload' && view.blocked ? (
                   <>
                     <p className="font-medium text-accent-3">
-                      Your export loaded, but film details couldn't be fetched
+                      Your export loaded, but Letterboxd blocked the film details
                     </p>
                     <p className="mt-1 text-muted">
-                      Letterboxd is rate limiting this server, so genres, runtimes
-                      and cast are missing for some films. Your film list and
-                      ratings are safe — try again in a few minutes and it will
-                      fill in the gaps.
+                      Genres, runtimes and cast come from Letterboxd itself, and
+                      it is rate limiting this server. Trying again in a few
+                      minutes often works, since anything already fetched is
+                      cached and skipped.
+                    </p>
+                    <p className="mt-2 text-muted">
+                      If it keeps failing, run it locally instead — a home
+                      connection is treated far more leniently than a hosted one.{' '}
+                      <a
+                        href="https://github.com/danielkwan-dev/memento#installation--usage"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-accent underline decoration-accent/40 hover:decoration-accent"
+                      >
+                        Setup instructions
+                      </a>{' '}
+                      — it is one <code className="text-text">docker compose up</code>.
                     </p>
                   </>
                 ) : (
