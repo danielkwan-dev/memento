@@ -89,6 +89,14 @@ func (s *Server) Routes() http.Handler {
 		r.Delete("/users/{username}", s.handleDeleteUser)
 	})
 
+	// The built frontend is served by this same process in the container image, so
+	// there is one deploy, one origin and no CORS to configure. Registered last, as
+	// a catch-all beneath the API routes; absent in local development, where Vite
+	// serves the app on its own port.
+	if StaticFS != nil {
+		r.Handle("/*", staticHandler(StaticFS))
+	}
+
 	return r
 }
 

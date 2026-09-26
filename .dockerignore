@@ -1,6 +1,7 @@
-# The Go image never needs the frontend or its dependencies. Without this,
-# node_modules is uploaded into the build context on every build.
-web/
+# The frontend stage builds from web/, but never needs its installed modules or
+# a previous local build.
+web/node_modules/
+web/dist/
 .git/
 .github/
 

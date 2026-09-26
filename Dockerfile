@@ -1,24 +1,36 @@
-# Multi-stage: build both binaries once, then ship each in its own tiny image.
-FROM golang:1.27-alpine AS build
+# Multi-stage: build the frontend, then both Go binaries, then ship each in its
+# own tiny image.
 
+# --- frontend ---
+FROM node:22-alpine AS web
+WORKDIR /web
+# Copy manifests first so npm ci is cached independently of source changes.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+# --- go ---
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
-# Copy manifests first so dependency download is cached independently of source
-# changes.
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 
-# CGO is off so the binaries are static and run on a scratch/alpine base.
-# Trimpath and stripped symbols keep the images small.
+# The api binary serves the built frontend as well as the API, so there is one
+# deploy and one origin. The embedfrontend tag activates cmd/api/embed.go, which
+# needs this directory to exist.
+COPY --from=web /web/dist ./cmd/api/dist
+
 ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /out/api    ./cmd/api && \
+RUN go build -tags embedfrontend -trimpath -ldflags="-s -w" -o /out/api ./cmd/api && \
     go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
-# --- api ---
+# --- api (serves the app and the API) ---
 FROM alpine:3.21 AS api
-# ca-certificates is required for outbound TLS; tzdata so timestamps localise.
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 10001 app
 COPY --from=build /out/api /usr/local/bin/api

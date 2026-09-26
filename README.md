@@ -31,7 +31,7 @@ Visualize your Letterboxd profile data with interactive charts and insights!
    ```bash
    docker compose up
    ```
-3. Visit [localhost:5173](http://localhost:5173)
+3. Visit [localhost:8080](http://localhost:8080)
 
 ### Option 2: Run Locally
 1. Start Postgres:
@@ -63,6 +63,9 @@ React • TypeScript • Recharts • Tailwind
 
 **Infrastructure**:  
 Docker • GitHub Actions • Fly.io
+
+The API image also serves the built React app, so the whole web tier is one
+deploy with no CORS to configure.
 
 ## Notes
 

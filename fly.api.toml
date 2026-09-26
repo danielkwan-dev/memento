@@ -1,7 +1,8 @@
-# Fly config for the API process.
+# Fly config for the web process: it serves both the React app and the API, so
+# there is one deploy, one origin and no CORS to configure.
 #
 # Deploy: fly deploy -c fly.api.toml
-app = 'memento-api'
+app = 'memento'
 primary_region = 'yyz'
 
 [build]
@@ -14,7 +15,6 @@ MEMENTO_PORT = '8080'
 # scaled-to-zero worker machine starts booting immediately; without it a job
 # would sit queued until the worker's own poll timer happened to wake it.
 MEMENTO_WORKER_HEALTH_URL = 'https://memento-worker.fly.dev/healthz'
-# Set MEMENTO_CORS_ORIGINS to the deployed frontend origin.
 
 [http_service]
 internal_port = 8080
