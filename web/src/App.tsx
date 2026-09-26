@@ -17,7 +17,7 @@ type View =
   | { kind: 'syncing'; username: string; jobId: string }
   | { kind: 'loading'; username: string }
   | { kind: 'ready'; username: string; stats: Stats }
-  | { kind: 'failed'; username: string; message: string }
+  | { kind: 'failed'; username: string; message: string; blocked?: boolean }
 
 type ServerState = 'unknown' | 'waking' | 'ready'
 
@@ -25,7 +25,6 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: 'idle' })
   const [input, setInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [mode, setMode] = useState<'scrape' | 'upload'>('scrape')
   const [file, setFile] = useState<File | null>(null)
   const [serverState, setServerState] = useState<ServerState>('unknown')
   const wakeStarted = useRef(false)
@@ -89,27 +88,31 @@ export default function App() {
     if (outcome.kind === 'complete') {
       void loadStats(view.username)
     } else if (outcome.kind === 'error') {
-      setView({ kind: 'failed', username: view.username, message: outcome.message })
+      setView({
+        kind: 'failed',
+        username: view.username,
+        message: outcome.message,
+        blocked: outcome.blocked,
+      })
     }
   }, [outcome, view, loadStats])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  // Scraping by username, and uploading an export, are two routes to the same
+  // job. They are offered side by side rather than as modes: the upload is the
+  // reliable one on a hosted deployment, where Letterboxd often will not serve
+  // the paginated profile pages at all.
+  const start = async (fn: () => Promise<{ job: { id: string } }>) => {
     const username = input.trim().toLowerCase()
     if (!username || submitting) return
-    if (mode === 'upload' && !file) return
 
     setSubmitting(true)
     try {
-      const res =
-        mode === 'upload' && file
-          ? await api.import(username, file)
-          : await api.sync(username)
+      const res = await fn()
       setView({ kind: 'syncing', username, jobId: res.job.id })
     } catch (err) {
       setView({
         kind: 'failed',
-        username,
+        username: input.trim().toLowerCase(),
         message:
           err instanceof ApiError
             ? err.message
@@ -119,6 +122,21 @@ export default function App() {
       setSubmitting(false)
     }
   }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    void start(() => api.sync(input.trim().toLowerCase()))
+  }
+
+  const handleUpload = () => {
+    if (!file) return
+    void start(() => api.import(input.trim().toLowerCase(), file))
+  }
+
+  // The reference implementation changes this label once scraping has been
+  // blocked, which is a good cue: before a failure the upload is an alternative,
+  // after one it is the way forward.
+  const blocked = view.kind === 'failed' && view.blocked === true
 
   if (view.kind === 'ready') {
     return (
@@ -156,79 +174,27 @@ export default function App() {
 
         {(view.kind === 'idle' || view.kind === 'failed') && (
           <>
-            <div className="mb-3 flex gap-1 rounded-lg border border-border bg-surface p-1">
-              {(['scrape', 'upload'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  aria-pressed={mode === m}
-                  className={`flex-1 rounded-md px-3 py-2 text-xs font-medium transition-colors ${
-                    mode === m
-                      ? 'bg-surface-2 text-text'
-                      : 'text-muted hover:text-text'
-                  }`}
-                >
-                  {m === 'scrape' ? 'By username' : 'Upload export'}
-                </button>
-              ))}
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-2">
-              <div className="flex gap-2">
-                <label htmlFor="username" className="sr-only">
-                  Letterboxd username
-                </label>
-                <input
-                  id="username"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="letterboxd username"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-text placeholder:text-muted/70 focus:border-accent focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  disabled={
-                    !input.trim() ||
-                    submitting ||
-                    (mode === 'upload' && !file)
-                  }
-                  className="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {submitting ? 'Starting…' : 'Analyse'}
-                </button>
-              </div>
-
-              {mode === 'upload' && (
-                <div>
-                  <label
-                    htmlFor="export"
-                    className="block cursor-pointer rounded-lg border border-dashed border-border bg-surface px-4 py-3 text-center text-sm text-muted transition-colors hover:border-muted hover:text-text"
-                  >
-                    {file ? (
-                      <span className="text-text">{file.name}</span>
-                    ) : (
-                      'Choose your letterboxd export .zip'
-                    )}
-                  </label>
-                  <input
-                    id="export"
-                    type="file"
-                    accept=".zip,application/zip"
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                    className="sr-only"
-                  />
-                  <p className="mt-2 text-xs leading-relaxed text-muted/80">
-                    Get it from Letterboxd → Settings → Data → Export Your Data.
-                    This skips reading your profile pages, which is the part most
-                    likely to be rate limited, so it is the more reliable route
-                    for large accounts.
-                  </p>
-                </div>
-              )}
+            <form onSubmit={handleSubmit} className="flex gap-2">
+              <label htmlFor="username" className="sr-only">
+                Letterboxd username
+              </label>
+              <input
+                id="username"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="letterboxd username"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-text placeholder:text-muted/70 focus:border-accent focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!input.trim() || submitting}
+                className="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {submitting ? 'Starting…' : 'Start'}
+              </button>
             </form>
 
             {serverState === 'waking' && (
@@ -243,10 +209,79 @@ export default function App() {
                 role="alert"
                 className="mt-4 rounded-lg border border-accent-3/40 bg-accent-3/10 px-4 py-3 text-sm"
               >
-                <p className="font-medium text-accent-3">Couldn't analyse that profile</p>
-                <p className="mt-1 text-muted">{view.message}</p>
+                {blocked ? (
+                  <>
+                    <p className="font-medium text-accent-3">
+                      Letterboxd wouldn't serve your film list to this server
+                    </p>
+                    <p className="mt-1 text-muted">
+                      This usually happens on hosted deployments rather than when
+                      running locally. Upload your data export below instead — it
+                      skips the pages that get blocked.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium text-accent-3">
+                      Couldn't analyse that profile
+                    </p>
+                    <p className="mt-1 text-muted">{view.message}</p>
+                  </>
+                )}
               </div>
             )}
+
+            {/* The export upload is always available, not hidden behind a
+                failure: on a hosted deployment it is the reliable route. */}
+            <div className="mt-6 border-t border-border pt-5">
+              <h2 className="text-sm font-medium text-text">
+                {blocked
+                  ? 'Upload your data export instead'
+                  : 'Or upload your Letterboxd data export'}
+              </h2>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                On Letterboxd, go to{' '}
+                <span className="font-medium text-text">
+                  Settings → Data → Export Your Data
+                </span>
+                , then upload the ZIP here without unpacking it. This is faster
+                than scraping.
+              </p>
+
+              <div className="mt-3 flex gap-2">
+                <label
+                  htmlFor="export"
+                  className="min-w-0 flex-1 cursor-pointer truncate rounded-lg border border-dashed border-border bg-surface px-4 py-3 text-center text-sm text-muted transition-colors hover:border-muted hover:text-text"
+                >
+                  {file ? (
+                    <span className="text-text">{file.name}</span>
+                  ) : (
+                    'Choose your export .zip'
+                  )}
+                </label>
+                <input
+                  id="export"
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  className="sr-only"
+                />
+                <button
+                  type="button"
+                  onClick={handleUpload}
+                  disabled={!file || !input.trim() || submitting}
+                  className="shrink-0 rounded-lg border border-border px-4 py-3 text-sm font-medium text-text transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Upload
+                </button>
+              </div>
+              {file && !input.trim() && (
+                <p className="mt-2 text-xs text-accent-3">
+                  Enter your username above as well, so the results can be saved
+                  against it.
+                </p>
+              )}
+            </div>
 
             <p className="mt-8 text-center text-xs leading-relaxed text-muted/80">
               Reads only public profile data. Film details are cached and shared

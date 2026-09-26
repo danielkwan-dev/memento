@@ -276,7 +276,7 @@ func TestEnqueueJob_IsIdempotentPerUser(t *testing.T) {
 	}
 
 	// Once the job is terminal, a new one is allowed.
-	if err := st.FinishJob(ctx, first.ID, ""); err != nil {
+	if err := st.FinishJob(ctx, first.ID, "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.EnqueueJob(ctx, "alice", KindScrape); err != nil {
@@ -542,4 +542,62 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// The blocked flag must survive a round trip, because the UI branches on it to
+// offer the export upload instead of a generic failure.
+func TestFinishJob_RecordsBlocked(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	blockedJob, err := st.EnqueueJob(ctx, "alice", KindScrape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishJob(ctx, blockedJob.ID, "letterboxd would not serve this host", true); err != nil {
+		t.Fatalf("FinishJob: %v", err)
+	}
+	got, err := st.JobByID(ctx, blockedJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Blocked {
+		t.Error("Blocked = false, want true")
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+
+	// An ordinary failure must NOT be marked blocked, or the UI would push the
+	// export upload at users whose problem is something else entirely.
+	plainJob, err := st.EnqueueJob(ctx, "bob", KindScrape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishJob(ctx, plainJob.ID, "some other failure", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.JobByID(ctx, plainJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Blocked {
+		t.Error("Blocked = true for a non-blocking failure")
+	}
+
+	// A success is never blocked.
+	okJob, err := st.EnqueueJob(ctx, "carol", KindScrape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishJob(ctx, okJob.ID, "", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.JobByID(ctx, okJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Blocked || got.Status != StatusSucceeded {
+		t.Errorf("succeeded job = %s blocked=%v", got.Status, got.Blocked)
+	}
 }

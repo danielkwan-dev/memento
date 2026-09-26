@@ -50,15 +50,18 @@ const (
 )
 
 type Job struct {
-	ID         uuid.UUID  `json:"id"`
-	Username   string     `json:"username"`
-	Kind       JobKind    `json:"kind"`
-	Status     JobStatus  `json:"status"`
-	Phase      JobPhase   `json:"phase"`
-	FilmsTotal int        `json:"films_total"`
-	FilmsDone  int        `json:"films_done"`
-	CacheHits  int        `json:"cache_hits"`
-	Error      string     `json:"error,omitempty"`
+	ID         uuid.UUID `json:"id"`
+	Username   string    `json:"username"`
+	Kind       JobKind   `json:"kind"`
+	Status     JobStatus `json:"status"`
+	Phase      JobPhase  `json:"phase"`
+	FilmsTotal int       `json:"films_total"`
+	FilmsDone  int       `json:"films_done"`
+	CacheHits  int       `json:"cache_hits"`
+	Error      string    `json:"error,omitempty"`
+	// Blocked marks a failure caused by Letterboxd refusing to serve this host,
+	// as opposed to any other error. The UI offers the export upload on this.
+	Blocked    bool       `json:"blocked"`
 	Attempts   int        `json:"attempts"`
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
@@ -71,20 +74,21 @@ func (j *Job) Terminal() bool {
 }
 
 const jobColumns = `id, username, kind, status, phase, films_total, films_done,
-	cache_hits, COALESCE(error, ''), attempts, created_at, started_at, finished_at`
+	cache_hits, COALESCE(error, ''), blocked, attempts, created_at, started_at,
+	finished_at`
 
 // jobColumnsQualified is jobColumns with every column prefixed by the "j" alias.
 // UPDATE ... FROM brings the CTE's columns into scope, so an unqualified "id" in
 // RETURNING is ambiguous between the target table and the CTE.
 const jobColumnsQualified = `j.id, j.username, j.kind, j.status, j.phase,
-	j.films_total, j.films_done, j.cache_hits, COALESCE(j.error, ''), j.attempts,
-	j.created_at, j.started_at, j.finished_at`
+	j.films_total, j.films_done, j.cache_hits, COALESCE(j.error, ''), j.blocked,
+	j.attempts, j.created_at, j.started_at, j.finished_at`
 
 func scanJob(row pgx.Row) (*Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.Username, &j.Kind, &j.Status, &j.Phase,
-		&j.FilmsTotal, &j.FilmsDone, &j.CacheHits, &j.Error, &j.Attempts,
-		&j.CreatedAt, &j.StartedAt, &j.FinishedAt)
+		&j.FilmsTotal, &j.FilmsDone, &j.CacheHits, &j.Error, &j.Blocked,
+		&j.Attempts, &j.CreatedAt, &j.StartedAt, &j.FinishedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +247,7 @@ type JobProgress struct {
 	FilmsDone  int       `json:"films_done"`
 	CacheHits  int       `json:"cache_hits"`
 	Error      string    `json:"error,omitempty"`
+	Blocked    bool      `json:"blocked,omitempty"`
 }
 
 // UpdateProgress persists progress and publishes it to any SSE subscriber.
@@ -262,8 +267,9 @@ func (s *Store) UpdateProgress(ctx context.Context, id uuid.UUID, phase JobPhase
 	return s.publishProgress(ctx, j)
 }
 
-// FinishJob marks a job terminal. A non-empty errMsg means failure.
-func (s *Store) FinishJob(ctx context.Context, id uuid.UUID, errMsg string) error {
+// FinishJob marks a job terminal. A non-empty errMsg means failure; blocked marks
+// the specific case of Letterboxd refusing to serve this host.
+func (s *Store) FinishJob(ctx context.Context, id uuid.UUID, errMsg string, blocked bool) error {
 	status := StatusSucceeded
 	phase := PhaseDone
 	if errMsg != "" {
@@ -271,9 +277,9 @@ func (s *Store) FinishJob(ctx context.Context, id uuid.UUID, errMsg string) erro
 	}
 	row := s.pool.QueryRow(ctx, `
 		UPDATE jobs SET status = $2, phase = $3, error = NULLIF($4, ''),
-		                finished_at = now(), locked_at = NULL
+		                blocked = $5, finished_at = now(), locked_at = NULL
 		WHERE id = $1
-		RETURNING `+jobColumns, id, string(status), string(phase), errMsg)
+		RETURNING `+jobColumns, id, string(status), string(phase), errMsg, blocked)
 	j, err := scanJob(row)
 	if err != nil {
 		return fmt.Errorf("finish job: %w", err)
@@ -340,6 +346,7 @@ func (s *Store) publishProgress(ctx context.Context, j *Job) error {
 		FilmsDone:  j.FilmsDone,
 		CacheHits:  j.CacheHits,
 		Error:      j.Error,
+		Blocked:    j.Blocked,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal progress: %w", err)

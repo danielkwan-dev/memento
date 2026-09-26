@@ -85,6 +85,15 @@ func DefaultConfig() Config {
 // the tolerated threshold, rather than grinding through the remaining films.
 var ErrTooManyFailures = errors.New("pipeline: upstream is failing too many requests")
 
+// ErrBlocked means Letterboxd refused to serve the profile pages to this host.
+//
+// It is kept distinct from other failures because the remedy is different and
+// worth telling the user: uploading a data export skips the paginated profile
+// pages entirely, which are the requests that get gated. The reference
+// implementation draws the same distinction (its FetchError) for the same reason
+// -- this happens on hosted deployments far more than it does locally.
+var ErrBlocked = errors.New("pipeline: letterboxd would not serve the film list to this host")
+
 type Pipeline struct {
 	fetch letterboxd.Fetcher
 	store Store
@@ -191,6 +200,9 @@ func (p *Pipeline) Run(ctx context.Context, jobID uuid.UUID, username string) (*
 	watch, diary, err := p.index(ctx, username)
 	stopIndexHeartbeat()
 	if err != nil {
+		if errors.Is(err, letterboxd.ErrBlocked) {
+			return nil, fmt.Errorf("%w: %w", ErrBlocked, err)
+		}
 		return nil, err
 	}
 	res.WatchEntries = len(watch)
@@ -227,9 +239,10 @@ func (p *Pipeline) Run(ctx context.Context, jobID uuid.UUID, username string) (*
 	fetched, statsFetched, failures, err := p.hydrate(ctx, jobID, split, total)
 	if err != nil {
 		if errors.Is(err, ErrTooManyFailures) {
-			// Almost always upstream rate limiting, which clears on its own, so
-			// say so instead of reporting an opaque failure.
-			return nil, fmt.Errorf("%w -- Letterboxd is rate limiting this scrape; try again in a few minutes", err)
+			// Almost always upstream rate limiting. Report it as blocking too, so
+			// the UI can offer the export upload, which avoids the gated requests.
+			// %w twice keeps both sentinels detectable.
+			return nil, fmt.Errorf("%w: %w", ErrBlocked, err)
 		}
 		return nil, err
 	}

@@ -27,6 +27,7 @@ export interface Job {
   films_done: number
   cache_hits: number
   error?: string
+  blocked?: boolean
   attempts: number
   created_at: string
   started_at?: string
@@ -41,6 +42,12 @@ export interface JobProgress {
   films_done: number
   cache_hits: number
   error?: string
+  /**
+   * True when Letterboxd refused to serve the profile pages to the server.
+   * Distinct from other failures because the remedy differs: uploading a data
+   * export skips the paginated pages that get gated.
+   */
+  blocked?: boolean
 }
 
 export interface SyncResponse {

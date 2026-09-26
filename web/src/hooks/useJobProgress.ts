@@ -4,7 +4,7 @@ import type { JobProgress } from '../lib/api'
 type Outcome =
   | { kind: 'pending' }
   | { kind: 'complete' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; blocked?: boolean }
 
 export interface JobProgressState {
   progress: JobProgress | null
@@ -78,15 +78,17 @@ export function useJobProgress(jobId: string | null): JobProgressState {
         const data = (event as MessageEvent).data
         if (data) {
           let message = 'The sync failed.'
+          let blocked = false
           try {
             const parsed = JSON.parse(data) as JobProgress & { error?: string }
             if (parsed.error) message = parsed.error
+            blocked = parsed.blocked === true
             setProgress(parsed)
           } catch {
             /* fall back to the generic message */
           }
           doneRef.current = true
-          setOutcome({ kind: 'error', message })
+          setOutcome({ kind: 'error', message, blocked })
           source?.close()
           return
         }

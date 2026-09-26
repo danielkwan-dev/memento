@@ -204,14 +204,18 @@ func runJob(ctx context.Context, st *store.Store, pipe *pipeline.Pipeline, job *
 			log.Warn("job interrupted by shutdown; will be requeued")
 			return
 		}
-		log.Error("job failed", "err", err, "duration", time.Since(start).Round(time.Second))
-		if ferr := st.FinishJob(context.WithoutCancel(jobCtx), job.ID, err.Error()); ferr != nil {
+		// Blocking is recorded separately: the user can act on it by uploading a
+		// data export, which skips the requests that get gated.
+		blocked := errors.Is(err, pipeline.ErrBlocked)
+		log.Error("job failed", "err", err, "blocked", blocked,
+			"duration", time.Since(start).Round(time.Second))
+		if ferr := st.FinishJob(context.WithoutCancel(jobCtx), job.ID, err.Error(), blocked); ferr != nil {
 			log.Error("could not mark job failed", "err", ferr)
 		}
 		return
 	}
 
-	if ferr := st.FinishJob(context.WithoutCancel(jobCtx), job.ID, ""); ferr != nil {
+	if ferr := st.FinishJob(context.WithoutCancel(jobCtx), job.ID, "", false); ferr != nil {
 		log.Error("could not mark job succeeded", "err", ferr)
 	}
 	// The archive has served its purpose; a finished job should not keep holding

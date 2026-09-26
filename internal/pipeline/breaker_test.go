@@ -37,12 +37,18 @@ func TestBreaker_TripsEarlyWhenMostFilmsFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error when every film fails")
 	}
+	// Both sentinels must be detectable: the API branches on ErrBlocked to offer
+	// the export upload, while the specific cause stays visible in logs.
 	if !errors.Is(err, ErrTooManyFailures) {
 		t.Errorf("error should wrap ErrTooManyFailures, got: %v", err)
 	}
-	// The message must point at the likely cause rather than being opaque.
-	if !contains(err.Error(), "rate limiting") {
-		t.Errorf("error should mention rate limiting, got: %v", err)
+	// Widespread failure is reported as blocking, so the UI can offer the export
+	// upload rather than a generic error.
+	if !errors.Is(err, ErrBlocked) {
+		t.Errorf("error should wrap ErrBlocked, got: %v", err)
+	}
+	if !contains(err.Error(), "would not serve") {
+		t.Errorf("error should explain that the host was refused, got: %v", err)
 	}
 
 	// The breaker must stop well short of attempting all 200 films.
