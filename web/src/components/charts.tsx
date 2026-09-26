@@ -17,7 +17,7 @@ import {
 } from 'recharts'
 import type { Bucket, DayCount, RatingBucket } from '../lib/api'
 import { EmptyChart, tooltipStyle } from './primitives'
-import { AXIS, GRID, PRIMARY, SERIES, heatStep } from '../lib/viz'
+import { AXIS, GRID, LBX, heatStep } from '../lib/viz'
 
 /**
  * Recharts types tooltip values as `ValueType | undefined`, so these adapters
@@ -62,7 +62,7 @@ export function RatingHistogram({ data }: { data: RatingBucket[] }) {
           labelFormatter={labelFormatter((l) => `${l} stars`)}
         />
         {/* 4px rounded data-end, anchored to the baseline. */}
-        <Bar dataKey="count" fill={PRIMARY} radius={[4, 4, 0, 0]} maxBarSize={44} />
+        <Bar dataKey="count" fill={LBX.green} radius={[4, 4, 0, 0]} maxBarSize={44} />
       </BarChart>
     </ResponsiveContainer>
   )
@@ -72,7 +72,7 @@ export function RatingHistogram({ data }: { data: RatingBucket[] }) {
 export function RankedBars({
   data,
   limit = 12,
-  color = PRIMARY,
+  color = LBX.blue,
 }: {
   data: Bucket[]
   limit?: number
@@ -132,8 +132,8 @@ export function DecadeRadar({ data }: { data: Bucket[] }) {
         <Tooltip {...tooltipStyle()} formatter={numFormatter((n) => `${n} films`)} />
         <Radar
           dataKey="count"
-          stroke={SERIES[2]}
-          fill={SERIES[2]}
+          stroke={LBX.green}
+          fill={LBX.green}
           fillOpacity={0.35}
           strokeWidth={2}
         />
@@ -159,7 +159,7 @@ export function ActivityLine({ data }: { data: DayCount[] }) {
         <Line
           type="monotone"
           dataKey="count"
-          stroke={PRIMARY}
+          stroke={LBX.blue}
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--color-surface)' }}
@@ -183,7 +183,7 @@ export function WeekdayBars({ data }: { data: DayCount[] }) {
         />
         <YAxis {...AXIS_PROPS} allowDecimals={false} />
         <Tooltip {...tooltipStyle()} formatter={numFormatter((n) => `${n} films`)} />
-        <Bar dataKey="count" fill={SERIES[1]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+        <Bar dataKey="count" fill={LBX.orange} radius={[4, 4, 0, 0]} maxBarSize={40} />
       </BarChart>
     </ResponsiveContainer>
   )

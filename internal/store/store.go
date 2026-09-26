@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,6 +50,26 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	cfg.MinConns = 0
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	cfg.MaxConnLifetime = time.Hour
+
+	// MEMENTO_DB_SCHEMA isolates concurrent test packages: go test runs packages
+	// in parallel, and two suites truncating the same tables wiped each other's
+	// rows mid-test. Unset in production, where the default schema is correct.
+	if schema := strings.TrimSpace(os.Getenv("MEMENTO_DB_SCHEMA")); schema != "" {
+		if cfg.ConnConfig.RuntimeParams == nil {
+			cfg.ConnConfig.RuntimeParams = map[string]string{}
+		}
+		cfg.ConnConfig.RuntimeParams["search_path"] = schema
+		prev := cfg.AfterConnect
+		cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+			if _, err := c.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{schema}.Sanitize()); err != nil {
+				return err
+			}
+			if prev != nil {
+				return prev(ctx, c)
+			}
+			return nil
+		}
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

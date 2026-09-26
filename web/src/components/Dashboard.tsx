@@ -16,7 +16,13 @@ import {
   RatingHistogram,
   WeekdayBars,
 } from './charts'
-import { SERIES } from '../lib/viz'
+import {
+  CategoryRadar,
+  LikedPie,
+  RatingScatter,
+  RatingTrendLine,
+} from './charts-extra'
+import { LBX } from '../lib/viz'
 
 type Tab = 'overview' | 'taste' | 'time' | 'people' | 'world'
 
@@ -137,8 +143,27 @@ export function Dashboard({
             />
           </div>
 
-          <Card title="Rating distribution" subtitle="How you spread your stars">
-            <RatingHistogram data={stats.ratings} />
+          <div className="grid gap-5 lg:grid-cols-3">
+            <Card
+              title="Rating distribution"
+              subtitle="How you spread your stars"
+              className="lg:col-span-2"
+            >
+              <RatingHistogram data={stats.ratings.histogram} />
+            </Card>
+            <Card title="Liked films" subtitle="What earned a heart">
+              <LikedPie
+                liked={stats.ratings.liked.liked}
+                notLiked={stats.ratings.liked.not_liked}
+              />
+            </Card>
+          </div>
+
+          <Card
+            title="You vs everyone else"
+            subtitle="Above the line means you rated it higher than the Letterboxd average"
+          >
+            <RatingScatter data={stats.ratings.scatter} />
           </Card>
 
           <Card
@@ -155,11 +180,17 @@ export function Dashboard({
           <Card title="Genres" subtitle="Most-watched, with your average rating on hover">
             <RankedBars data={stats.genres} />
           </Card>
+          <Card title="Genre spread" subtitle="A spiky shape means narrow taste">
+            <CategoryRadar data={stats.genres} />
+          </Card>
           <Card title="Themes" subtitle="Letterboxd's thematic tags">
-            <RankedBars data={stats.themes} color={SERIES[4]} />
+            <RankedBars data={stats.themes} color={LBX.orange} />
+          </Card>
+          <Card title="Theme spread" subtitle="The moods you gravitate to">
+            <CategoryRadar data={stats.themes} color={LBX.orange} />
           </Card>
           <Card title="Runtime" subtitle="Film length in 30-minute bands">
-            <RankedBars data={stats.runtime} color={SERIES[3]} limit={10} />
+            <RankedBars data={stats.runtime} color={LBX.green} limit={10} />
           </Card>
           <Card
             title="Obscurity"
@@ -195,6 +226,12 @@ export function Dashboard({
           <Card title="Films per month" subtitle="Your diary over time">
             <ActivityLine data={stats.activity?.monthly ?? []} />
           </Card>
+          <Card
+            title="Average rating over time"
+            subtitle="Whether you have grown more generous or more picky"
+          >
+            <RatingTrendLine data={stats.activity?.rating_trend ?? []} />
+          </Card>
           <div className="grid gap-5 lg:grid-cols-2">
             <Card title="Decades" subtitle="Era spread of what you watch">
               <DecadeRadar data={stats.decades} />
@@ -212,10 +249,13 @@ export function Dashboard({
             <RankedBars data={stats.people?.directors ?? []} />
           </Card>
           <Card title="Actors" subtitle="Top billing only, so ensembles don't dominate">
-            <RankedBars data={stats.people?.actors ?? []} color={SERIES[1]} />
+            <RankedBars data={stats.people?.actors ?? []} color={LBX.orange} />
           </Card>
-          <Card title="Studios" subtitle="Production companies" className="lg:col-span-2">
-            <RankedBars data={stats.people?.studios ?? []} color={SERIES[2]} limit={15} />
+          <Card title="Directors at a glance" subtitle="Your most-watched, as a shape">
+            <CategoryRadar data={stats.people?.directors ?? []} color={LBX.blue} />
+          </Card>
+          <Card title="Studios" subtitle="Production companies">
+            <RankedBars data={stats.people?.studios ?? []} color={LBX.green} limit={15} />
           </Card>
         </div>
       )}
@@ -226,7 +266,19 @@ export function Dashboard({
             <RankedBars data={stats.geography?.countries ?? []} limit={15} />
           </Card>
           <Card title="Languages" subtitle="Spoken languages">
-            <RankedBars data={stats.geography?.languages ?? []} color={SERIES[2]} limit={15} />
+            <RankedBars data={stats.geography?.languages ?? []} color={LBX.green} limit={15} />
+          </Card>
+          <Card title="Country spread" subtitle="How far your watching ranges">
+            <CategoryRadar
+              data={stats.geography?.countries ?? []}
+              color={LBX.orange}
+            />
+          </Card>
+          <Card title="Language spread" subtitle="Beyond the dominant one">
+            <CategoryRadar
+              data={(stats.geography?.languages ?? []).slice(1)}
+              color={LBX.blue}
+            />
           </Card>
         </div>
       )}

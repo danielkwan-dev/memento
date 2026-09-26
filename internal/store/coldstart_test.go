@@ -91,6 +91,11 @@ func TestColdStart_ProgressIsRecoverableAfterReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if recovered == nil {
+		// Another process claimed and finished the job. That only happens when a
+		// real worker is polling the same database as the tests.
+		t.Fatal("job disappeared; is a worker running against the test database?")
+	}
 	if recovered.Phase != PhaseHydrate {
 		t.Errorf("phase = %s, want hydrate", recovered.Phase)
 	}

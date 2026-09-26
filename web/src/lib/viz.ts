@@ -48,3 +48,22 @@ export function heatStep(value: number, max: number): string {
 
 export const AXIS = 'var(--color-muted)'
 export const GRID = 'var(--color-border)'
+
+/**
+ * Letterboxd's own accent trio, used the way the reference project uses them:
+ * ONE per chart, as that chart's identity colour.
+ *
+ * These deliberately are not a categorical scale. The accessibility problem with
+ * them is telling several apart *within one chart* -- they sit too close in
+ * lightness for that. A chart drawn in a single colour has nothing to confuse, so
+ * the brand palette is safe here, and it is what makes the dashboard look like it
+ * belongs to Letterboxd rather than a generic BI tool.
+ */
+export const LBX = {
+  green: '#00e054',
+  blue: '#40bbf4',
+  orange: '#ff8000',
+} as const
+
+/** A muted counterpart for the "other"/remainder slice of a two-part chart. */
+export const LBX_MUTED = '#2a333c'

@@ -29,6 +29,9 @@ func testStore(t *testing.T) *Store {
 		t.Skip("set MEMENTO_TEST_DATABASE_URL to run store tests (docker compose up -d postgres)")
 	}
 
+	// Own schema, so a parallel package's TRUNCATE cannot wipe these rows.
+	t.Setenv("MEMENTO_DB_SCHEMA", "test_store")
+
 	ctx := context.Background()
 	st, err := Open(ctx, dsn)
 	if err != nil {
@@ -361,6 +364,9 @@ func TestReapStaleJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if after == nil {
+		t.Fatal("job not found; is a worker polling the test database?")
+	}
 	if after.Status != StatusQueued {
 		t.Errorf("status = %s, want queued", after.Status)
 	}
@@ -418,6 +424,9 @@ func TestUpdateProgress_PersistsAndNotifies(t *testing.T) {
 	reloaded, err := st.JobByID(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if reloaded == nil {
+		t.Fatal("job not found; is a worker polling the test database?")
 	}
 	if reloaded.FilmsDone != 7 || reloaded.FilmsTotal != 20 || reloaded.CacheHits != 3 {
 		t.Errorf("persisted progress = %d/%d hits=%d, want 7/20 hits=3",

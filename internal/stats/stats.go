@@ -64,6 +64,28 @@ type RatingBucket struct {
 	Count  int     `json:"count"`
 }
 
+// ScatterPoint is one film plotted as the user's rating against Letterboxd's
+// average, which shows where their taste diverges from the crowd.
+type ScatterPoint struct {
+	Title     string  `json:"title"`
+	Year      int     `json:"year,omitempty"`
+	Rating    float64 `json:"rating"`
+	AvgRating float64 `json:"avg_rating"`
+}
+
+// LikedSplit powers the liked/not-liked pie.
+type LikedSplit struct {
+	Liked    int `json:"liked"`
+	NotLiked int `json:"not_liked"`
+}
+
+// RatingsPayload is everything the ratings tab needs in one response.
+type RatingsPayload struct {
+	Histogram []RatingBucket `json:"histogram"`
+	Scatter   []ScatterPoint `json:"scatter"`
+	Liked     LikedSplit     `json:"liked"`
+}
+
 type DayCount struct {
 	Date  string `json:"date"`
 	Count int    `json:"count"`
@@ -92,7 +114,7 @@ func (s *Service) Compute(ctx context.Context, userID int64, cat Category) (any,
 	case CatOverview:
 		return s.overview(ctx, userID)
 	case CatRatings:
-		return s.ratings(ctx, userID)
+		return s.ratingsPayload(ctx, userID)
 	case CatActivity:
 		return s.activity(ctx, userID)
 	case CatGenres:
@@ -173,6 +195,62 @@ func (s *Service) ratings(ctx context.Context, userID int64) ([]RatingBucket, er
 	return out, rows.Err()
 }
 
+// ratingsPayload bundles the ratings charts, so the tab needs one request.
+func (s *Service) ratingsPayload(ctx context.Context, userID int64) (*RatingsPayload, error) {
+	hist, err := s.ratings(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	scatter, err := s.ratingScatter(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	liked, err := s.likedSplit(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &RatingsPayload{Histogram: hist, Scatter: scatter, Liked: *liked}, nil
+}
+
+// ratingScatter pairs the user's rating with the crowd's for each rated film.
+//
+// Capped: a scatter of 5000 points is slow to render and no more readable than
+// 1200, and the shape is what matters here.
+func (s *Service) ratingScatter(ctx context.Context, userID int64) ([]ScatterPoint, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT f.title, COALESCE(f.year, 0), w.rating::float8, f.avg_rating::float8
+		FROM watch_entries w
+		JOIN films f ON f.slug = w.film_slug
+		WHERE w.user_id = $1 AND w.rating IS NOT NULL AND f.avg_rating IS NOT NULL
+		ORDER BY f.avg_rating
+		LIMIT 1200`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("rating scatter: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ScatterPoint
+	for rows.Next() {
+		var p ScatterPoint
+		if err := rows.Scan(&p.Title, &p.Year, &p.Rating, &p.AvgRating); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) likedSplit(ctx context.Context, userID int64) (*LikedSplit, error) {
+	var l LikedSplit
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE liked), count(*) FILTER (WHERE NOT liked)
+		FROM watch_entries WHERE user_id = $1`, userID).Scan(&l.Liked, &l.NotLiked)
+	if err != nil {
+		return nil, fmt.Errorf("liked split: %w", err)
+	}
+	return &l, nil
+}
+
 // activity powers the calendar heatmap and the per-month line chart.
 func (s *Service) activity(ctx context.Context, userID int64) (map[string]any, error) {
 	daily, err := s.dayCounts(ctx, userID, `
@@ -189,6 +267,12 @@ func (s *Service) activity(ctx context.Context, userID int64) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
+	// Average rating per month, for the ratings-over-time line.
+	trend, err := s.ratingTrend(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
 	weekday, err := s.dayCounts(ctx, userID, `
 		SELECT trim(to_char(watched_on, 'Day')), count(*)::int
 		FROM diary_entries WHERE user_id = $1
@@ -196,7 +280,38 @@ func (s *Service) activity(ctx context.Context, userID int64) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"daily": daily, "monthly": monthly, "weekday": weekday}, nil
+	return map[string]any{
+		"daily": daily, "monthly": monthly, "weekday": weekday, "rating_trend": trend,
+	}, nil
+}
+
+// MonthAvg is the mean rating for one month of diary entries.
+type MonthAvg struct {
+	Month string  `json:"month"`
+	Avg   float64 `json:"avg"`
+	Count int     `json:"count"`
+}
+
+func (s *Service) ratingTrend(ctx context.Context, userID int64) ([]MonthAvg, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_char(date_trunc('month', watched_on), 'YYYY-MM'),
+		       avg(rating)::float8, count(*)::int
+		FROM diary_entries
+		WHERE user_id = $1 AND rating IS NOT NULL
+		GROUP BY 1 ORDER BY 1`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("rating trend: %w", err)
+	}
+	defer rows.Close()
+	var out []MonthAvg
+	for rows.Next() {
+		var m MonthAvg
+		if err := rows.Scan(&m.Month, &m.Avg, &m.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func (s *Service) dayCounts(ctx context.Context, userID int64, query string) ([]DayCount, error) {

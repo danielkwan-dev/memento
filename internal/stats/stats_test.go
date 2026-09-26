@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/danielkwan-dev/memento/internal/store"
 )
 
 // These tests need real Postgres: the thing under test is the SQL. A typo in a
@@ -21,27 +23,23 @@ func testService(t *testing.T) (*Service, *pgxpool.Pool, int64) {
 		t.Skip("set MEMENTO_TEST_DATABASE_URL to run stats tests (docker compose up -d postgres)")
 	}
 
+	// Own schema, so a parallel package's TRUNCATE cannot wipe these rows.
+	t.Setenv("MEMENTO_DB_SCHEMA", "test_stats")
+
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	// Open through the store so the schema is created and migrated.
+	st, err := store.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(pool.Close)
+	t.Cleanup(st.Close)
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool := st.Pool()
 
 	if err := pool.Ping(ctx); err != nil {
 		t.Fatalf("ping: %v", err)
-	}
-
-	// The store package owns migrations; this asserts they have been applied
-	// rather than duplicating them.
-	var exists bool
-	if err := pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'watch_entries')`).
-		Scan(&exists); err != nil {
-		t.Fatalf("check schema: %v", err)
-	}
-	if !exists {
-		t.Skip("schema not migrated; run the store tests or start the api once first")
 	}
 
 	if _, err := pool.Exec(ctx,
@@ -451,5 +449,91 @@ func TestCompute_EmptyUser(t *testing.T) {
 	}
 	if o.FilmsLogged != 0 || o.AvgRating != nil {
 		t.Errorf("empty overview = %+v, want zeros and a nil average", o)
+	}
+}
+
+// The scatter pairs the user's rating with the crowd's, which is what makes the
+// "you vs everyone else" chart meaningful.
+func TestRatingScatter(t *testing.T) {
+	svc, _, userID := testService(t)
+
+	pts, err := svc.ratingScatter(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("ratingScatter: %v", err)
+	}
+	// Only rated films with a known average qualify; the seed has 2 of 3.
+	if len(pts) != 2 {
+		t.Fatalf("got %d points, want 2 (the unrated film is excluded)", len(pts))
+	}
+	for _, p := range pts {
+		if p.Title == "" {
+			t.Error("point has no title; the tooltip needs it")
+		}
+		if p.Rating < 0.5 || p.Rating > 5 {
+			t.Errorf("rating %v out of range", p.Rating)
+		}
+		if p.AvgRating <= 0 || p.AvgRating > 5 {
+			t.Errorf("avg_rating %v out of range", p.AvgRating)
+		}
+	}
+}
+
+func TestLikedSplit(t *testing.T) {
+	svc, _, userID := testService(t)
+
+	l, err := svc.likedSplit(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("likedSplit: %v", err)
+	}
+	// The seed likes 2 of 3 films.
+	if l.Liked != 2 {
+		t.Errorf("Liked = %d, want 2", l.Liked)
+	}
+	if l.NotLiked != 1 {
+		t.Errorf("NotLiked = %d, want 1", l.NotLiked)
+	}
+}
+
+func TestRatingTrend(t *testing.T) {
+	svc, _, userID := testService(t)
+
+	trend, err := svc.ratingTrend(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("ratingTrend: %v", err)
+	}
+	// The seed has rated diary entries in 2024-03 and 2024-04.
+	if len(trend) != 2 {
+		t.Fatalf("got %d months, want 2: %+v", len(trend), trend)
+	}
+	if trend[0].Month != "2024-03" {
+		t.Errorf("first month = %q, want 2024-03 (ascending)", trend[0].Month)
+	}
+	for _, m := range trend {
+		if m.Avg < 0.5 || m.Avg > 5 {
+			t.Errorf("month %s average %v out of range", m.Month, m.Avg)
+		}
+		if m.Count < 1 {
+			t.Errorf("month %s has count %d", m.Month, m.Count)
+		}
+	}
+}
+
+// The ratings category must return all three charts in one payload, so the tab
+// needs a single request.
+func TestRatingsPayload(t *testing.T) {
+	svc, _, userID := testService(t)
+
+	p, err := svc.ratingsPayload(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("ratingsPayload: %v", err)
+	}
+	if len(p.Histogram) != 10 {
+		t.Errorf("histogram has %d buckets, want 10", len(p.Histogram))
+	}
+	if len(p.Scatter) == 0 {
+		t.Error("scatter is empty")
+	}
+	if p.Liked.Liked+p.Liked.NotLiked == 0 {
+		t.Error("liked split is empty")
 	}
 }

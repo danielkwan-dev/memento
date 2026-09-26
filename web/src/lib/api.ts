@@ -72,6 +72,33 @@ export interface DayCount {
   count: number
 }
 
+/** One film's rating against Letterboxd's average, for the scatter. */
+export interface ScatterPoint {
+  title: string
+  year?: number
+  rating: number
+  avg_rating: number
+}
+
+/** Mean rating for one month, for the trend line. */
+export interface MonthAvg {
+  month: string
+  avg: number
+  count: number
+}
+
+export interface LikedSplit {
+  liked: number
+  not_liked: number
+}
+
+/** The ratings tab bundles its three charts into one response. */
+export interface RatingsPayload {
+  histogram: RatingBucket[]
+  scatter: ScatterPoint[]
+  liked: LikedSplit
+}
+
 export interface Overview {
   films_logged: number
   diary_entries: number
@@ -90,8 +117,13 @@ export interface RareFilm {
 
 export interface Stats {
   overview: Overview
-  ratings: RatingBucket[]
-  activity: { daily: DayCount[]; monthly: DayCount[]; weekday: DayCount[] }
+  ratings: RatingsPayload
+  activity: {
+    daily: DayCount[]
+    monthly: DayCount[]
+    weekday: DayCount[]
+    rating_trend: MonthAvg[]
+  }
   genres: Bucket[]
   themes: Bucket[]
   decades: Bucket[]
