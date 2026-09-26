@@ -17,7 +17,14 @@ type View =
   | { kind: 'syncing'; username: string; jobId: string }
   | { kind: 'loading'; username: string }
   | { kind: 'ready'; username: string; stats: Stats }
-  | { kind: 'failed'; username: string; message: string; blocked?: boolean }
+  | {
+      kind: 'failed'
+      username: string
+      message: string
+      blocked?: boolean
+      /** Which route failed, so the advice can match it. */
+      via?: 'scrape' | 'upload'
+    }
 
 type ServerState = 'unknown' | 'waking' | 'ready'
 
@@ -28,6 +35,8 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null)
   const [serverState, setServerState] = useState<ServerState>('unknown')
   const wakeStarted = useRef(false)
+  // Which route started the current job, so a failure gives matching advice.
+  const lastViaRef = useRef<'scrape' | 'upload'>('scrape')
 
   // Wake the backend as soon as the page loads.
   //
@@ -93,6 +102,7 @@ export default function App() {
         username: view.username,
         message: outcome.message,
         blocked: outcome.blocked,
+        via: lastViaRef.current,
       })
     }
   }, [outcome, view, loadStats])
@@ -101,7 +111,10 @@ export default function App() {
   // job. They are offered side by side rather than as modes: the upload is the
   // reliable one on a hosted deployment, where Letterboxd often will not serve
   // the paginated profile pages at all.
-  const start = async (fn: () => Promise<{ job: { id: string } }>) => {
+  const start = async (
+    fn: () => Promise<{ job: { id: string } }>,
+    via: 'scrape' | 'upload',
+  ) => {
     const username = input.trim().toLowerCase()
     if (!username || submitting) return
 
@@ -109,6 +122,7 @@ export default function App() {
     try {
       const res = await fn()
       setView({ kind: 'syncing', username, jobId: res.job.id })
+      lastViaRef.current = via
     } catch (err) {
       setView({
         kind: 'failed',
@@ -117,6 +131,7 @@ export default function App() {
           err instanceof ApiError
             ? err.message
             : 'Could not reach the server. Please try again.',
+        via,
       })
     } finally {
       setSubmitting(false)
@@ -125,18 +140,21 @@ export default function App() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    void start(() => api.sync(input.trim().toLowerCase()))
+    void start(() => api.sync(input.trim().toLowerCase()), 'scrape')
   }
 
   const handleUpload = () => {
     if (!file) return
-    void start(() => api.import(input.trim().toLowerCase(), file))
+    void start(() => api.import(input.trim().toLowerCase(), file), 'upload')
   }
 
   // The reference implementation changes this label once scraping has been
   // blocked, which is a good cue: before a failure the upload is an alternative,
   // after one it is the way forward.
-  const blocked = view.kind === 'failed' && view.blocked === true
+  // Suggesting "upload an export instead" only makes sense when the SCRAPE was
+  // blocked. Saying it after an upload already failed is nonsense.
+  const blocked =
+    view.kind === 'failed' && view.blocked === true && view.via !== 'upload'
 
   if (view.kind === 'ready') {
     return (
@@ -218,6 +236,18 @@ export default function App() {
                       This usually happens on hosted deployments rather than when
                       running locally. Upload your data export below instead — it
                       skips the pages that get blocked.
+                    </p>
+                  </>
+                ) : view.via === 'upload' && view.blocked ? (
+                  <>
+                    <p className="font-medium text-accent-3">
+                      Your export loaded, but film details couldn't be fetched
+                    </p>
+                    <p className="mt-1 text-muted">
+                      Letterboxd is rate limiting this server, so genres, runtimes
+                      and cast are missing for some films. Your film list and
+                      ratings are safe — try again in a few minutes and it will
+                      fill in the gaps.
                     </p>
                   </>
                 ) : (

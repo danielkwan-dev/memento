@@ -563,7 +563,12 @@ func (p *Pipeline) hydrate(ctx context.Context, jobID uuid.UUID, split *store.St
 	}
 
 	if err := g.Wait(); err != nil {
-		return 0, 0, 0, err
+		// Return the counters alongside the error, not zeros: an import persists
+		// its export even when hydration fails, and the UI needs to say how many
+		// films are missing metadata. Discarding them made a partial result look
+		// like nothing had happened.
+		return int(detailCount.Load()), int(statsCount.Load()),
+			int(failureCount.Load()), err
 	}
 	stopProgress()
 

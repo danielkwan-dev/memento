@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -69,20 +70,29 @@ func (p *Pipeline) RunImport(ctx context.Context, jobID uuid.UUID, username stri
 		return nil, err
 	}
 
+	// Hydration is ENRICHMENT for an import, not the data itself.
+	//
+	// The film list came from the user's own export, so it is already complete and
+	// correct -- fetching details only adds genres, runtimes and cast. If upstream
+	// throttles partway, throwing the whole import away would discard a perfectly
+	// good film list over missing metadata, and tell the user to "upload an export
+	// instead" when that is exactly what they just did. So a hydrate failure here
+	// degrades the result and the job still succeeds; charts that need the missing
+	// metadata simply show less, and a later run fills the gaps from the cache.
+	//
+	// A scrape is different: there the film list itself comes from the network, so
+	// widespread failure means the data is untrustworthy and Run still fails.
 	fetched, statsFetched, failures, err := p.hydrate(ctx, jobID, split, total)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		p.log.Warn("import hydration incomplete; persisting the export anyway",
+			"username", username, "err", err)
 	}
 	res.FilmsFetched = fetched
 	res.StatsFetched = statsFetched
 	res.FilmFailures = failures
-
-	if total > 0 {
-		if ratio := float64(failures) / float64(total); ratio > p.cfg.MaxFilmFailureRatio {
-			return nil, fmt.Errorf("hydrate failed for %d of %d films (%.0f%%), above the %.0f%% threshold",
-				failures, total, ratio*100, p.cfg.MaxFilmFailureRatio*100)
-		}
-	}
 
 	// --- Phase: persist ---
 	if err := p.store.UpdateProgress(ctx, jobID, store.PhasePersist, total, total, split.CacheHits); err != nil {
