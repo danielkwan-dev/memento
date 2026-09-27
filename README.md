@@ -2,7 +2,7 @@
 
 Visualize your Letterboxd profile data with interactive charts and insights!
 
-**[Try it live](https://memento-0fke.onrender.com)** — the server sleeps when idle, so the first load takes a moment to wake up.
+**[Try it live](https://memento-0fke.onrender.com)**! The server sleeps when idle, so the first load takes a moment to wake up.
 
 <img width="602" height="700" alt="image" src="https://github.com/user-attachments/assets/236ae752-8cb5-4b7d-b2dc-dd3478f8ca45" />
 <img width="593" height="699" alt="image" src="https://github.com/user-attachments/assets/5848e275-a4bc-4f38-b4d7-3cb03482e6a4" />
@@ -98,6 +98,3 @@ go test ./...
 docker compose up -d postgres
 MEMENTO_TEST_DATABASE_URL=postgres://memento:memento@localhost:5432/memento?sslmode=disable go test ./...
 ```
-
-##
-Thanks for reading :)
