@@ -1,6 +1,10 @@
 # 🍿 Memento
 
 Visualize your Letterboxd profile data with interactive charts and insights!
+<img width="602" height="700" alt="image" src="https://github.com/user-attachments/assets/236ae752-8cb5-4b7d-b2dc-dd3478f8ca45" />
+<img width="593" height="699" alt="image" src="https://github.com/user-attachments/assets/5848e275-a4bc-4f38-b4d7-3cb03482e6a4" />
+<img width="581" height="638" alt="image" src="https://github.com/user-attachments/assets/d3a58bd9-716b-4f56-882f-88ae7e91dee1" />
+<img width="578" height="596" alt="image" src="https://github.com/user-attachments/assets/4b929c40-c09d-4341-b9c5-bda4ce1b2f41" />
 
 ## How It Works
 
